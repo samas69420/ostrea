@@ -142,45 +142,45 @@ Changing environment specific parameters (like gravity for lunar lander etc.) ca
 
 bipedal walker (hardcore) solved using sac
 
-![](media/sac_bipedal.mp4?raw=true)
+<video src="media/sac_bipedal.mp4" width="400" controls></video>
 
 cartpole solved using vpg
 
-![](media/vpg_cartpole.mp4?raw=true)
+<video src="media/vpg_cartpole.mp4" width="400" controls></video>
 
 cheetah solved using sac
 
-![](media/sac_cheetah.mp4?raw=true)
+<video src="media/sac_cheetah.mp4" width="400" controls></video>
 
 lander (discrete) solved using dql with epsilon decay
 
-![](media/dql_lander.mp4?raw=true)
+<video src="media/dql_lander.mp4" width="400" controls></video>
 
 lander (continuous) solved using ddpg
 
-![](media/ddpg_lander_c.mp4?raw=true)
+<video src="media/ddpg_lander_c.mp4" width="400" controls></video>
 
 lander (continuous) solved using ppo (with state dependent covariance matrix)
 
-![](media/ppo_lander_c.mp4?raw=true)
+<video src="media/ppo_lander_c.mp4" width="400" controls></video>
 
 humanoid solved using ppo 
 
-![](media/ppo_humanoid.mp4?raw=true)
+<video src="media/ppo_humanoid.mp4" width="400" controls></video>
 
 #### honorable mentions
 
 proximal policy optimization turned into pirate policy optimization
 
-![](media/arrrr.mp4?raw=true)
+<video src="media/arrrr.mp4" width="400" controls></video>
 
 ppo agent found the optimal motion of a cheetah (having a stroke)
 
-![](media/cheetah_s.mp4?raw=true)
+<video src="media/cheetah_s.mp4" width="400" controls></video>
 
 sac agent accidentally discovered parkour
 
-![](media/cheetah_p.mp4?raw=true)
+<video src="media/cheetah_p.mp4" width="400" controls></video>
 
 
 ---
