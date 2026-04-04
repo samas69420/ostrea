@@ -1,0 +1,11 @@
+__pycache__/
+cheetah*/
+lander_continuous*/
+lander*/
+cartpole*/
+ant*/
+humanoid*/
+walker*/
+bipedal_hardcore*/
+bipedal*/
+MUJOCO_LOG.TXT
