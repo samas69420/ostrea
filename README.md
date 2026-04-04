@@ -142,46 +142,45 @@ Changing environment specific parameters (like gravity for lunar lander etc.) ca
 
 bipedal walker (hardcore) solved using sac
 
-[[video src="https://github.com/samas69420/ostrea/raw/master/media/sac_bipedal.mp4"]]
+https://github.com/user-attachments/assets/c0bc7218-f38f-4bed-94fd-ff4ef20c44cf
 
 cartpole solved using vpg
 
-[[video src="https://github.com/samas69420/ostrea/raw/master/media/vpg_cartpole.mp4"]]
+https://github.com/user-attachments/assets/2492cb2f-cde4-4ca3-8d8a-756f30b626c7
 
 cheetah solved using sac
 
-[[video src="https://github.com/samas69420/ostrea/raw/master/media/sac_cheetah.mp4"]]
+https://github.com/user-attachments/assets/84db1ad6-40b7-40f0-903f-1b34b0613303
 
 lander (discrete) solved using dql with epsilon decay
 
-[[video src="https://github.com/samas69420/ostrea/raw/master/media/dql_lander.mp4"]]
+https://github.com/user-attachments/assets/9240fd15-ce5f-447f-a9d0-6a893673b9b8
 
 lander (continuous) solved using ddpg
 
-[[video src="https://github.com/samas69420/ostrea/raw/master/media/ddpg_lander_c.mp4"]]
+https://github.com/user-attachments/assets/dd4ecafd-5659-41a3-b3e4-15eacba30029
 
 lander (continuous) solved using ppo (with state dependent covariance matrix)
 
-[[video src="https://github.com/samas69420/ostrea/raw/master/media/ppo_lander_c.mp4"]]
+https://github.com/user-attachments/assets/12387291-f384-4102-8980-9eebee6e8b04
 
 humanoid solved using ppo 
 
-[[video src="https://github.com/samas69420/ostrea/raw/master/media/ppo_humanoid.mp4"]]
+https://github.com/user-attachments/assets/ee6561d8-0a50-4235-b0ef-9b8b313188c2
 
 #### honorable mentions
 
 proximal policy optimization turned into pirate policy optimization
 
-[[video src="https://github.com/samas69420/ostrea/raw/master/media/arrrr.mp4"]]
+https://github.com/user-attachments/assets/6333ed50-6205-4d4c-af57-6dd6caef50aa
 
 ppo agent found the optimal motion of a cheetah (having a stroke)
 
-[[video src="https://github.com/samas69420/ostrea/raw/master/media/cheetah_s.mp4"]]
+https://github.com/user-attachments/assets/7fa3e207-b9eb-4e0b-adb1-cfe01ce85b5f
 
 sac agent accidentally discovered parkour
 
-[[video src="https://github.com/samas69420/ostrea/raw/master/media/cheetah_p.mp4"]]
-
+https://github.com/user-attachments/assets/9226ea7c-aeaf-4343-a3eb-8d65e8c48750
 
 ---
 
