@@ -142,45 +142,45 @@ Changing environment specific parameters (like gravity for lunar lander etc.) ca
 
 bipedal walker (hardcore) solved using sac
 
-<video src="https://raw.githubusercontent.com/samas69420/ostrea/master/media/sac_bipedal.mp4" width="400" controls></video>
+[[video src="https://github.com/samas69420/ostrea/raw/master/media/sac_bipedal.mp4"]]
 
 cartpole solved using vpg
 
-<video src="https://raw.githubusercontent.com/samas69420/ostrea/master/media/vpg_cartpole.mp4" width="400" controls></video>
+[[video src="https://github.com/samas69420/ostrea/raw/master/media/vpg_cartpole.mp4"]]
 
 cheetah solved using sac
 
-<video src="https://raw.githubusercontent.com/samas69420/ostrea/master/media/sac_cheetah.mp4" width="400" controls></video>
+[[video src="https://github.com/samas69420/ostrea/raw/master/media/sac_cheetah.mp4"]]
 
 lander (discrete) solved using dql with epsilon decay
 
-<video src="https://raw.githubusercontent.com/samas69420/ostrea/master/media/dql_lander.mp4" width="400" controls></video>
+[[video src="https://github.com/samas69420/ostrea/raw/master/media/dql_lander.mp4"]]
 
 lander (continuous) solved using ddpg
 
-<video src="https://raw.githubusercontent.com/samas69420/ostrea/master/media/ddpg_lander_c.mp4" width="400" controls></video>
+[[video src="https://github.com/samas69420/ostrea/raw/master/media/ddpg_lander_c.mp4"]]
 
 lander (continuous) solved using ppo (with state dependent covariance matrix)
 
-<video src="https://raw.githubusercontent.com/samas69420/ostrea/master/media/ppo_lander_c.mp4" width="400" controls></video>
+[[video src="https://github.com/samas69420/ostrea/raw/master/media/ppo_lander_c.mp4"]]
 
 humanoid solved using ppo 
 
-<video src="https://raw.githubusercontent.com/samas69420/ostrea/master/media/ppo_humanoid.mp4" width="400" controls></video>
+[[video src="https://github.com/samas69420/ostrea/raw/master/media/ppo_humanoid.mp4"]]
 
 #### honorable mentions
 
 proximal policy optimization turned into pirate policy optimization
 
-<video src="https://raw.githubusercontent.com/samas69420/ostrea/master/media/arrrr.mp4" width="400" controls></video>
+[[video src="https://github.com/samas69420/ostrea/raw/master/media/arrrr.mp4"]]
 
 ppo agent found the optimal motion of a cheetah (having a stroke)
 
-<video src="https://raw.githubusercontent.com/samas69420/ostrea/master/media/cheetah_s.mp4" width="400" controls></video>
+[[video src="https://github.com/samas69420/ostrea/raw/master/media/cheetah_s.mp4"]]
 
 sac agent accidentally discovered parkour
 
-<video src="https://raw.githubusercontent.com/samas69420/ostrea/master/media/cheetah_p.mp4" width="400" controls></video>
+[[video src="https://github.com/samas69420/ostrea/raw/master/media/cheetah_p.mp4"]]
 
 
 ---
