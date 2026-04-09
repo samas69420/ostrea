@@ -53,6 +53,10 @@ The agent is periodically tested during training and when it achieves a new best
 * walker
 * bipedal 
 * bipedal\_hardcore
+* acrobot
+* reacher
+* mountaincar\_continuous
+* mountaincar
 
 ---
 

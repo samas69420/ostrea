@@ -358,7 +358,11 @@ if __name__ == "__main__":
                ant
                walker
                bipedal
-               bipedal_hardcore""".replace(" ", ""))
+               bipedal_hardcore
+               acrobot
+               reacher
+               mountaincar_continuous
+               mountaincar""".replace(" ", ""))
 
         quit()
     
