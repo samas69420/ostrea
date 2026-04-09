@@ -8,4 +8,8 @@ humanoid*/
 walker*/
 bipedal_hardcore*/
 bipedal*/
+acrobot*/
+reacher*/
+mountaincar*/
+mountaincar_continuous*/
 MUJOCO_LOG.TXT

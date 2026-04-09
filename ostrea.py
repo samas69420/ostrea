@@ -77,6 +77,22 @@ def train_model(algo, environment, dry, model_file_pol, model_file_val, notes):
         env = gymnasium.make_vec("BipedalWalker-v3", hardcore=False, num_envs = params.N_ENV)
         eval_env = gymnasium.make_vec("BipedalWalker-v3", hardcore=False, num_envs = 1)
         env_is_continuous = True
+    elif environment == "acrobot":
+        env = gymnasium.make_vec("Acrobot-v1", num_envs = params.N_ENV)
+        eval_env = gymnasium.make_vec("Acrobot-v1", num_envs = 1)
+        env_is_continuous = False
+    elif environment == "reacher":
+        env = gymnasium.make_vec("Reacher-v5", reward_dist_weight = 5., num_envs = params.N_ENV)
+        eval_env = gymnasium.make_vec("Reacher-v5", reward_dist_weight = 5., num_envs = 1)
+        env_is_continuous = True
+    elif environment == "mountaincar_continuous":
+        env = gymnasium.make_vec("MountainCarContinuous-v0", num_envs = params.N_ENV)
+        eval_env = gymnasium.make_vec("MountainCarContinuous-v0", num_envs = 1)
+        env_is_continuous = True
+    elif environment == "mountaincar":
+        env = gymnasium.make_vec("MountainCar-v0", num_envs = params.N_ENV)
+        eval_env = gymnasium.make_vec("MountainCar-v0", num_envs = 1)
+        env_is_continuous = False
     else:
         raise ValueError("invalid environment")
 
@@ -131,13 +147,13 @@ def train_model(algo, environment, dry, model_file_pol, model_file_val, notes):
             observation, reward, terminated, truncated, info = env.step(action.cpu().numpy())
 
             S_t_plus_1 = torch.tensor(observation, dtype=torch.float32).to(params.DEVICE)
-       
+
             episode_over = torch.tensor(terminated).logical_or(torch.tensor(truncated)).to(params.DEVICE)
 
             reward = torch.tensor(reward).to(params.DEVICE)
-       
+
             agent.buffer.append((S_t, action, reward, S_t_plus_1, episode_over, logprob))
-       
+
             buffer_return += reward
 
             num_steps += 1
@@ -240,6 +256,18 @@ def test_model(algo, environment, model_file_pol, model_file_val, n_runs, record
     elif environment == "bipedal":
         env = gymnasium.make("BipedalWalker-v3", hardcore=False, render_mode = render_mode)
         env_is_continuous = True
+    elif environment == "acrobot":
+        env = gymnasium.make("Acrobot-v1", render_mode = render_mode)
+        env_is_continuous = False
+    elif environment == "reacher":
+        env = gymnasium.make("Reacher-v5", render_mode = render_mode)
+        env_is_continuous = True
+    elif environment == "mountaincar_continuous":
+        env = gymnasium.make("MountainCarContinuous-v0", render_mode = render_mode)
+        env_is_continuous = True
+    elif environment == "mountaincar":
+        env = gymnasium.make("MountainCar-v0", render_mode = render_mode)
+        env_is_continuous = False
     else:
         raise ValueError("invalid environment")
 
@@ -278,7 +306,7 @@ def test_model(algo, environment, model_file_pol, model_file_val, n_runs, record
         with torch.no_grad():
             while not done:
                 action = agent.choose_action_greedy(torch.tensor(observation).to(torch.float))
-                observation, reward, terminated, truncated, info = env.step(action.cpu().squeeze().numpy())
+                observation, reward, terminated, truncated, info = env.step(action.cpu().numpy())
                 done = terminated or truncated
                 total_reward += reward
                 if render_delay and not record: 

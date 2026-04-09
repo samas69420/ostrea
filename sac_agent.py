@@ -11,7 +11,7 @@ params = Params(
 
                 # environment/general training parameters 
 
-                SEED = 69420,                    # seed used with torch
+                SEED = None,                     # seed used with torch
                 MAX_TRAINING_STEPS = 100e6,      # 100M
                 BUFFER_SIZE = 100,               # size of episode buffer that triggers the update
                 PRINT_FREQ_STEPS = 100,          # after how many steps the logs should be printed during training       
