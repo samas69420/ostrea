@@ -57,6 +57,13 @@ The agent is periodically tested during training and when it achieves a new best
 * reacher
 * mountaincar\_continuous
 * mountaincar
+* pendulum
+* pusher
+* hopper
+* humanoid\_standup
+* inverted\_d\_pendulum
+* inverted\_pendulum
+* swimmer
 
 ---
 
@@ -136,7 +143,7 @@ print(params.NEWPARAM)
 ```
 For more details check `parameters.py`
 
-Changing environment specific parameters (like gravity for lunar lander etc.) can be done in the environment declaration in the main script
+Environment specific parameters (like gravity for lunar lander etc.) can be edited in the environments table in `ostrea.py`
 
 ---
 

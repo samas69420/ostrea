@@ -7,6 +7,30 @@ from plotter import Plotter
 import datetime
 from gymnasium.wrappers import RecordVideo
 
+
+environments_table = {}
+environments_table["cartpole"]               = {"full": "CartPole-v1",              "is_continuous": False, "args": None}
+environments_table["lander"]                 = {"full": "LunarLander-v3",           "is_continuous": False, "args": {'gravity': -10.0}}
+environments_table["lander_continuous"]      = {"full": "LunarLander-v3",           "is_continuous": True , "args": {'gravity': -10.0, 'continuous': True}}
+environments_table["cheetah"]                = {"full": "HalfCheetah-v5",           "is_continuous": True , "args": {'ctrl_cost_weight': 0.1}}
+environments_table["humanoid"]               = {"full": "Humanoid-v5",              "is_continuous": True , "args": None}
+environments_table["ant"]                    = {"full": "Ant-v5",                   "is_continuous": True , "args": None}
+environments_table["walker"]                 = {"full": "Walker2d-v5",              "is_continuous": True , "args": None}
+environments_table["bipedal"]                = {"full": "BipedalWalker-v3",         "is_continuous": True , "args": {'hardcore': False}}
+environments_table["bipedal_hardcore"]       = {"full": "BipedalWalker-v3",         "is_continuous": True , "args": {'hardcore': True}}
+environments_table["acrobot"]                = {"full": "Acrobot-v1",               "is_continuous": False, "args": None}
+environments_table["reacher"]                = {"full": "Reacher-v5",               "is_continuous": True , "args": {'reward_dist_weight ': 5.}}
+environments_table["mountaincar_continuous"] = {"full": "MountainCarContinuous-v0", "is_continuous": True , "args": None}
+environments_table["mountaincar"]            = {"full": "MountainCar-v0",           "is_continuous": False, "args": None}
+environments_table["pendulum"]               = {"full": "Pendulum-v1",              "is_continuous": True , "args": {'g': 9.81}}
+environments_table["pusher"]                 = {"full": "Pusher-v5",                "is_continuous": True , "args": None}
+environments_table["hopper"]                 = {"full": "Hopper-v5",                "is_continuous": True , "args": None}
+environments_table["humanoid_standup"]       = {"full": "HumanoidStandup-v5",       "is_continuous": True , "args": None}
+environments_table["inverted_d_pendulum"]    = {"full": "InvertedDoublePendulum-v5","is_continuous": True , "args": None}
+environments_table["inverted_pendulum"]      = {"full": "InvertedPendulum-v5",      "is_continuous": True , "args": None}
+environments_table["swimmer"]                = {"full": "Swimmer-v5",               "is_continuous": True , "args": None}
+
+
 def train_model(algo, environment, dry, model_file_pol, model_file_val, notes):
 
     def evaluate_policy(env, agent, episodes=10):
@@ -23,78 +47,42 @@ def train_model(algo, environment, dry, model_file_pol, model_file_val, notes):
                     done = term.squeeze() or trunc.squeeze()
         return avg_reward / episodes
 
+    def get_environments_train(shortname, n_envs):
+        full_name = environments_table[shortname]["full"]
+        is_continuous = environments_table[shortname]["is_continuous"]
+        args = environments_table[shortname]["args"]
+        if args:
+            env = gymnasium.make_vec(full_name,**args,num_envs = n_envs)
+            eval_env = gymnasium.make_vec(full_name,**args,num_envs = 1)
+        else:
+            env = gymnasium.make_vec(full_name,num_envs = n_envs)
+            eval_env = gymnasium.make_vec(full_name,num_envs = 1)
+        return env, eval_env, is_continuous
+
     if algo == "ppo":
         from ppo_agent import PPOAgent as Agent
         from ppo_agent import params
+        bounded_actions = False
     elif algo == "dql":
         from dql_agent import DQLAgent as Agent
         from dql_agent import params
+        bounded_actions = False
     elif algo == "sac":
         from sac_agent import SACAgent as Agent
         from sac_agent import params
+        bounded_actions = True
     elif algo == "vpg":
         from vpg_agent import VPGAgent as Agent
         from vpg_agent import params
+        bounded_actions = False
     elif algo == "ddpg":
         from ddpg_agent import DDPGAgent as Agent
         from ddpg_agent import params
+        bounded_actions = True
     else:
         raise ValueError("invalid algo")
 
-    if environment == "cheetah":
-        env = gymnasium.make_vec('HalfCheetah-v5', ctrl_cost_weight=0.1, num_envs = params.N_ENV)
-        eval_env = gymnasium.make_vec('HalfCheetah-v5', ctrl_cost_weight=0.1, num_envs = 1)
-        env_is_continuous = True
-    elif environment == "lander_continuous":
-        env = gymnasium.make_vec('LunarLander-v3', continuous=True, gravity=-10.0, num_envs = params.N_ENV)
-        eval_env = gymnasium.make_vec('LunarLander-v3', continuous=True, gravity=-10.0, num_envs = 1)
-        env_is_continuous = True
-    elif environment == "lander":
-        env = gymnasium.make_vec('LunarLander-v3', continuous=False, gravity=-10.0, num_envs = params.N_ENV)
-        eval_env = gymnasium.make_vec('LunarLander-v3', continuous=False, gravity=-10.0, num_envs = 1)
-        env_is_continuous = False
-    elif environment == "cartpole":
-        env = gymnasium.make_vec('CartPole-v1', num_envs = params.N_ENV)
-        eval_env = gymnasium.make_vec('CartPole-v1', 1)
-        env_is_continuous = False
-    elif environment == "ant":
-        env = gymnasium.make_vec("Ant-v5", num_envs = params.N_ENV)
-        eval_env = gymnasium.make_vec("Ant-v5", num_envs = 1)
-        env_is_continuous = True
-    elif environment == "humanoid":
-        env = gymnasium.make_vec("Humanoid-v5", num_envs = params.N_ENV)
-        eval_env = gymnasium.make_vec("Humanoid-v5", num_envs = 1)
-        env_is_continuous = True
-    elif environment == "walker":
-        env = gymnasium.make_vec("Walker2d-v5", num_envs = params.N_ENV)
-        eval_env = gymnasium.make_vec("Walker2d-v5", num_envs = 1)
-        env_is_continuous = True
-    elif environment == "bipedal_hardcore":
-        env = gymnasium.make_vec("BipedalWalker-v3", hardcore=True, num_envs = params.N_ENV)
-        eval_env = gymnasium.make_vec("BipedalWalker-v3", hardcore=True, num_envs = 1)
-        env_is_continuous = True
-    elif environment == "bipedal":
-        env = gymnasium.make_vec("BipedalWalker-v3", hardcore=False, num_envs = params.N_ENV)
-        eval_env = gymnasium.make_vec("BipedalWalker-v3", hardcore=False, num_envs = 1)
-        env_is_continuous = True
-    elif environment == "acrobot":
-        env = gymnasium.make_vec("Acrobot-v1", num_envs = params.N_ENV)
-        eval_env = gymnasium.make_vec("Acrobot-v1", num_envs = 1)
-        env_is_continuous = False
-    elif environment == "reacher":
-        env = gymnasium.make_vec("Reacher-v5", reward_dist_weight = 5., num_envs = params.N_ENV)
-        eval_env = gymnasium.make_vec("Reacher-v5", reward_dist_weight = 5., num_envs = 1)
-        env_is_continuous = True
-    elif environment == "mountaincar_continuous":
-        env = gymnasium.make_vec("MountainCarContinuous-v0", num_envs = params.N_ENV)
-        eval_env = gymnasium.make_vec("MountainCarContinuous-v0", num_envs = 1)
-        env_is_continuous = True
-    elif environment == "mountaincar":
-        env = gymnasium.make_vec("MountainCar-v0", num_envs = params.N_ENV)
-        eval_env = gymnasium.make_vec("MountainCar-v0", num_envs = 1)
-        env_is_continuous = False
-    else:
-        raise ValueError("invalid environment")
+    env, eval_env, env_is_continuous = get_environments_train(environment, params.N_ENV)
 
     params.value_model_checkpoint = model_file_val
     params.policy_model_checkpoint = model_file_pol
@@ -142,9 +130,15 @@ def train_model(algo, environment, dry, model_file_pol, model_file_val, notes):
         while len(agent.buffer) < params.BUFFER_SIZE:
 
             S_t = torch.tensor(observation, dtype=torch.float32).to(params.DEVICE)
+
             action,logprob = agent.choose_action(S_t)
 
-            observation, reward, terminated, truncated, info = env.step(action.cpu().numpy())
+            if bounded_actions and env_is_continuous:
+                scaled_action = action*env.action_space.high.max()
+            else:
+                scaled_action = action
+
+            observation, reward, terminated, truncated, info = env.step(scaled_action.cpu().numpy())
 
             S_t_plus_1 = torch.tensor(observation, dtype=torch.float32).to(params.DEVICE)
 
@@ -195,21 +189,36 @@ def train_model(algo, environment, dry, model_file_pol, model_file_val, notes):
 
 def test_model(algo, environment, model_file_pol, model_file_val, n_runs, record):
 
+    def get_environment_test(shortname, render_mode):
+        full_name = environments_table[shortname]["full"]
+        is_continuous = environments_table[shortname]["is_continuous"]
+        args = environments_table[shortname]["args"]
+        if args:
+            env = gymnasium.make(full_name,**args, render_mode = render_mode)
+        else:
+            env = gymnasium.make(full_name, render_mode = render_mode)
+        return env, is_continuous
+
     if algo == "ppo":
         from ppo_agent import PPOAgent as Agent
         from ppo_agent import params
+        bounded_actions = False
     elif algo == "dql":
         from dql_agent import DQLAgent as Agent
         from dql_agent import params
+        bounded_actions = False
     elif algo == "sac":
         from sac_agent import SACAgent as Agent
         from sac_agent import params
+        bounded_actions = True
     elif algo == "vpg":
         from vpg_agent import VPGAgent as Agent
         from vpg_agent import params
+        bounded_actions = False
     elif algo == "ddpg":
         from ddpg_agent import DDPGAgent as Agent
         from ddpg_agent import params
+        bounded_actions = True
     else:
         raise ValueError("invalid algo")
 
@@ -222,54 +231,15 @@ def test_model(algo, environment, model_file_pol, model_file_val, n_runs, record
 
     # some environments go too fast and the render_fps in metadata doesn't help
     render_delay = False 
+    if environment == "cheetah":
+        render_delay = 0.05
 
     if record:
         render_mode = "rgb_array"
     else:
         render_mode = "human"
 
-    if environment == "cheetah":
-        env = gymnasium.make('HalfCheetah-v5', ctrl_cost_weight=0.1, render_mode = render_mode)
-        env_is_continuous = True
-        render_delay = 0.05
-    elif environment == "lander_continuous":
-        env = gymnasium.make('LunarLander-v3', continuous=True, gravity=-10.0, render_mode = render_mode)
-        env_is_continuous = True
-    elif environment == "lander":
-        env = gymnasium.make('LunarLander-v3', continuous=False, gravity=-10.0, render_mode = render_mode)
-        env_is_continuous = False
-    elif environment == "cartpole":
-        env = gymnasium.make('CartPole-v1', render_mode = render_mode)
-        env_is_continuous = False
-    elif environment == "humanoid":
-        env = gymnasium.make("Humanoid-v5", render_mode = render_mode)
-        env_is_continuous = True
-    elif environment == "ant":
-        env = gymnasium.make("Ant-v5", render_mode = render_mode)
-        env_is_continuous = True
-    elif environment == "walker":
-        env = gymnasium.make("Walker2d-v5", render_mode = render_mode)
-        env_is_continuous = True
-    elif environment == "bipedal_hardcore":
-        env = gymnasium.make("BipedalWalker-v3", hardcore=True, render_mode = render_mode)
-        env_is_continuous = True
-    elif environment == "bipedal":
-        env = gymnasium.make("BipedalWalker-v3", hardcore=False, render_mode = render_mode)
-        env_is_continuous = True
-    elif environment == "acrobot":
-        env = gymnasium.make("Acrobot-v1", render_mode = render_mode)
-        env_is_continuous = False
-    elif environment == "reacher":
-        env = gymnasium.make("Reacher-v5", render_mode = render_mode)
-        env_is_continuous = True
-    elif environment == "mountaincar_continuous":
-        env = gymnasium.make("MountainCarContinuous-v0", render_mode = render_mode)
-        env_is_continuous = True
-    elif environment == "mountaincar":
-        env = gymnasium.make("MountainCar-v0", render_mode = render_mode)
-        env_is_continuous = False
-    else:
-        raise ValueError("invalid environment")
+    env, env_is_continuous = get_environment_test(environment, render_mode)
 
     if record:
         
@@ -304,11 +274,22 @@ def test_model(algo, environment, model_file_pol, model_file_val, n_runs, record
     
         # run the episode
         with torch.no_grad():
+
             while not done:
+
                 action = agent.choose_action_greedy(torch.tensor(observation).to(torch.float))
+
+                if bounded_actions and env_is_continuous:
+                    scaled_action = action*env.action_space.high.max()
+                else:
+                    scaled_action = action
+
                 observation, reward, terminated, truncated, info = env.step(action.cpu().numpy())
+
                 done = terminated or truncated
+
                 total_reward += reward
+
                 if render_delay and not record: 
                     time.sleep(render_delay)
     
@@ -362,7 +343,14 @@ if __name__ == "__main__":
                acrobot
                reacher
                mountaincar_continuous
-               mountaincar""".replace(" ", ""))
+               mountaincar
+               pendulum
+               pusher
+               hopper
+               humanoid_standup
+               inverted_d_pendulum
+               inverted_pendulum
+               swimmer""".replace(" ", ""))
 
         quit()
     

@@ -12,4 +12,11 @@ acrobot*/
 reacher*/
 mountaincar*/
 mountaincar_continuous*/
+pendulum*/
+pusher*/
+hopper*/
+humanoid_standup*/
+inverted_d_pendulum*/
+inverted_pendulum*/
+swimmer*/
 MUJOCO_LOG.TXT
