@@ -13,6 +13,7 @@
     * load only policy net for test with policy methods
     * record multiple episodes in one file during testing
     * support to other network types other than mlp
+    * type hints
 
 #### sac
     

@@ -143,7 +143,7 @@ print(params.NEWPARAM)
 ```
 For more details check `parameters.py`
 
-Environment specific parameters (like gravity for lunar lander etc.) can be edited in the environments table in `ostrea.py`
+Environment specific parameters (like gravity for lunar lander etc.) can be edited in the environments table in `environments.py`
 
 ---
 
