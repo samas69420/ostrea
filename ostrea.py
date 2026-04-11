@@ -33,18 +33,35 @@ environments_table["swimmer"]                = {"full": "Swimmer-v5",           
 
 def train_model(algo, environment, dry, model_file_pol, model_file_val, notes):
 
-    def evaluate_policy(env, agent, episodes=10):
+    def evaluate_policy(env, agent, scale_action, episodes=10):
+
         avg_reward = 0.
+
         with torch.no_grad():
+
             for _ in range(episodes):
+
                 state, _ = env.reset()
+
                 done = False
+
                 while not done:
+
                     state_t = torch.FloatTensor(state).to(params.DEVICE)
+
                     action = agent.choose_action_greedy(state_t.squeeze()).unsqueeze(0)
-                    state, reward, term, trunc, _ = env.step(action.cpu().numpy())
+
+                    if scale_action:
+                        scaled_action = action*env.action_space.high.max()
+                    else:
+                        scaled_action = action
+
+                    state, reward, term, trunc, _ = env.step(scaled_action.cpu().numpy())
+
                     avg_reward += reward.squeeze()
+
                     done = term.squeeze() or trunc.squeeze()
+
         return avg_reward / episodes
 
     def get_environments_train(shortname, n_envs):
@@ -120,6 +137,8 @@ def train_model(algo, environment, dry, model_file_pol, model_file_val, notes):
     best_score = -torch.inf
     eval_score = None
 
+    scale_action = bounded_actions and env_is_continuous
+
     # env is reset only here because vectorized envs do it automatically after each episode 
     observation, info = env.reset() 
 
@@ -133,7 +152,7 @@ def train_model(algo, environment, dry, model_file_pol, model_file_val, notes):
 
             action,logprob = agent.choose_action(S_t)
 
-            if bounded_actions and env_is_continuous:
+            if scale_action:
                 scaled_action = action*env.action_space.high.max()
             else:
                 scaled_action = action
@@ -154,7 +173,7 @@ def train_model(algo, environment, dry, model_file_pol, model_file_val, notes):
 
             if num_steps % params.PRINT_FREQ_STEPS == 0:
 
-                eval_score = evaluate_policy(eval_env, agent, params.N_EVAL_EPISODES)
+                eval_score = evaluate_policy(eval_env, agent, scale_action, params.N_EVAL_EPISODES)
 
                 avg_return = buffer_return.mean().item()
                 print(f"steps:{num_steps} | avg undisc return: {avg_return:.2f} | updates: {updates} | last eval: {eval_score:.2f}")
@@ -284,7 +303,7 @@ def test_model(algo, environment, model_file_pol, model_file_val, n_runs, record
                 else:
                     scaled_action = action
 
-                observation, reward, terminated, truncated, info = env.step(action.cpu().numpy())
+                observation, reward, terminated, truncated, info = env.step(scaled_action.cpu().numpy())
 
                 done = terminated or truncated
 
