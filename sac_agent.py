@@ -1,11 +1,12 @@
 import torch
-import random
 import torch.nn as nn
 import gymnasium
-from collections import deque
 from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.distributions.categorical import Categorical
 from parameters import Params
+from checkpoint import CheckpointHandler
+from replaymemory import ReplayMemory
+
 
 params = Params(
 
@@ -18,15 +19,16 @@ params = Params(
                 UPDATE_PLOT_SAVE_FREQ = 100,     # after how many updates the avg return plot should be saved 
                 N_EVAL_EPISODES = 10,            # how many episodes should be used for evaluation during training 
                 GAMMA = 0.99,
-                N_ENV = 64,
-                DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
+                N_ENV = 32,
+                CHECKPOINT_SAVE_FREQ = 100000,   # after how many steps the full checkpoint should be saved during training
+                CHECKPOINT_NAME = "ckpt.pt",     # name used to save the full training checkpoint (WARNING: it will also contain the ReplayMemory, make sure you have enough ram)
+                MODEL_NAME = "model.pt",         # name used to save the inference model, only saved when a new best score is reached
+                DEVICE = torch.device("cuda:1") if torch.cuda.is_available() else torch.device("cpu"),
 
                 # agent parameters 
 
                 WARMUP = 10000,                  # warmup steps without any update
-                MODEL_NAME_POL = "policy.pt",
-                MODEL_NAME_VAL = "value_net.pt",
-                MEMORY_MAXLEN = 1_000_000,
+                MEMORY_MAXLEN = 500_000,
                 MEMORY_BATCH_SIZE = 256,
                 GRADIENT_STEPS = 100,            # how many gradient steps should be done in the update function, same value as buffer size to have a updates/data ratio close to 1
                 NUMERICAL_EPSILON = 1e-6,        # small value for numerical stabilty
@@ -41,25 +43,6 @@ params = Params(
                 ALGO_NAME = "sac"
 
                )
-
-
-class ReplayMemory:
-    
-    def __init__(self, maxlen):
-        
-        self.buffer = deque(maxlen=maxlen)
-
-    def __len__(self):
-
-        return len(self.buffer)
-
-    def append(self, element):
-
-        self.buffer.append(element)
-
-    def sample(self, n):
-
-        return random.sample(self.buffer, n)
 
 
 class SACAgent:
@@ -96,6 +79,8 @@ class SACAgent:
 
     def __init__(self, parameters):
 
+        # extract the hardcoded values from parameters
+
         self.gamma = parameters.GAMMA
         self.value_lr =  parameters.VALUE_LR
         self.policy_lr = parameters.POLICY_LR
@@ -109,12 +94,14 @@ class SACAgent:
         self.numerical_epsilon = parameters.NUMERICAL_EPSILON
         self.max_logvar = parameters.MAX_LOGVAR
         self.min_logvar = parameters.MIN_LOGVAR
+        self.policy_method = parameters.POLICY_METHOD
+
+        # extract the other values added before calling the constructor
 
         self.obs_size = parameters.obs_size
         self.action_space_dim = parameters.action_space_dim
         self.continuous_actions = parameters.env_is_continuous
-        self.value_model_checkpoint = parameters.value_model_checkpoint
-        self.policy_model_checkpoint = parameters.policy_model_checkpoint
+        self.checkpoint = parameters.checkpoint
 
         self.log_alpha = torch.nn.Parameter(torch.rand(1).to(self.device))
 
@@ -134,44 +121,59 @@ class SACAgent:
 
         self.memory = ReplayMemory(maxlen=self.memory_maxlen)
 
+        #self.policy_net = nn.Sequential(
+        #  nn.Linear(self.obs_size, 100),
+        #  nn.Tanh(),
+        #  nn.Linear(100, 100),
+        #  nn.Tanh(),
+        #  nn.Linear(100, policy_net_output_dim)).to(self.device)
+
+        #self.q_net = nn.Sequential(
+        #  nn.Linear(q_net_input_dim , 100),
+        #  nn.LeakyReLU(),
+        #  nn.Linear(100, 100),
+        #  nn.LeakyReLU(),
+        #  nn.Linear(100, q_net_output_dim)).to(self.device) 
+
+        #self.target_q_net = nn.Sequential(
+        #  nn.Linear(q_net_input_dim , 100),
+        #  nn.LeakyReLU(),
+        #  nn.Linear(100, 100),
+        #  nn.LeakyReLU(),
+        #  nn.Linear(100, q_net_output_dim)).to(self.device) 
+
         self.policy_net = nn.Sequential(
-          nn.Linear(self.obs_size, 100),
-          nn.Tanh(),
-          nn.Linear(100, 100),
-          nn.Tanh(),
-          nn.Linear(100, policy_net_output_dim)).to(self.device)
+          nn.Linear(self.obs_size, 512),
+          nn.LeakyReLU(),
+          nn.Linear(512, 512),
+          nn.LeakyReLU(),
+          nn.Linear(512, 512),
+          nn.LeakyReLU(),
+          nn.Linear(512, 512),
+          nn.LeakyReLU(),
+          nn.Linear(512, policy_net_output_dim)).to(self.device)
 
         self.q_net = nn.Sequential(
-          nn.Linear(q_net_input_dim , 100),
+          nn.Linear(q_net_input_dim , 512),
           nn.LeakyReLU(),
-          nn.Linear(100, 100),
+          nn.Linear(512, 512),
           nn.LeakyReLU(),
-          nn.Linear(100, q_net_output_dim)).to(self.device) 
+          nn.Linear(512, 512),
+          nn.LeakyReLU(),
+          nn.Linear(512, 512),
+          nn.LeakyReLU(),
+          nn.Linear(512, q_net_output_dim)).to(self.device) 
 
         self.target_q_net = nn.Sequential(
-          nn.Linear(q_net_input_dim , 100),
+          nn.Linear(q_net_input_dim , 512),
           nn.LeakyReLU(),
-          nn.Linear(100, 100),
+          nn.Linear(512, 512),
           nn.LeakyReLU(),
-          nn.Linear(100, q_net_output_dim)).to(self.device) 
-
-        if self.policy_model_checkpoint:
-            try:
-                self.policy_net.load_state_dict(torch.load(self.policy_model_checkpoint, map_location = self.device))
-                print(f"policy checkpoint loaded")
-            except Exception as e:
-                print(f"cant load policy weights: \n {e} \n")
-        else:
-            print("training a new policy net")
-
-        if self.value_model_checkpoint:
-            try:
-                self.q_net.load_state_dict(torch.load(self.value_model_checkpoint, map_location = self.device))
-                print(f"value checkpoint loaded")
-            except Exception as e:
-                print(f"cant load value weights: \n {e} \n")
-        else:
-            print("training a new value net")
+          nn.Linear(512, 512),
+          nn.LeakyReLU(),
+          nn.Linear(512, 512),
+          nn.LeakyReLU(),
+          nn.Linear(512, q_net_output_dim)).to(self.device) 
 
         self.target_q_net.load_state_dict(self.q_net.state_dict())
 
@@ -187,7 +189,29 @@ class SACAgent:
         self.optim_temp = torch.optim.Adam([self.log_alpha],
                           lr = self.alpha_lr)
 
+        self.checkpoint_handler = CheckpointHandler(self)
+
+        if self.checkpoint:
+            self.load_checkpoint(self.checkpoint, self.device)
+        else:
+            print("no checkpoint, training new networks")
+
         self.mse = torch.nn.MSELoss()
+
+
+    def save_checkpoint(self, checkpoint_path):
+        # save the full training checkpoint
+        self.checkpoint_handler.save(checkpoint_path, full=True)
+
+
+    def save_model(self, checkpoint_path):
+        # save only the model for inference
+        self.checkpoint_handler.save(checkpoint_path, full=False)
+
+
+    def load_checkpoint(self, checkpoint_path, device):
+        # used for both training checkpoints and inference models
+        self.checkpoint_handler.load(checkpoint_path, device)
 
 
     def choose_action_greedy(self, obs):

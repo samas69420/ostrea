@@ -35,6 +35,7 @@
     * choice for decay
     * other types of decay
     * soft update for target nets
+    * epsilon in the checkpoint 
 
 #### ppo
     

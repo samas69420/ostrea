@@ -2,9 +2,10 @@ import torch
 import torch.nn as nn
 from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.distributions.categorical import Categorical
-import random
-from collections import deque
 from parameters import Params
+from replaymemory import ReplayMemory
+from checkpoint import CheckpointHandler
+
 
 params = Params(
 
@@ -13,11 +14,14 @@ params = Params(
                 SEED = None,                     # seed used with torch
                 MAX_TRAINING_STEPS = 100e6,      # 100M
                 BUFFER_SIZE = 200,               # size of episode buffer that triggers the update
-                PRINT_FREQ_STEPS = 5000,         # after how many steps the logs should be printed during training
-                UPDATE_PLOT_SAVE_FREQ = 20,      # after how many updates the avg return plot should be saved 
+                PRINT_FREQ_STEPS = 1000,         # after how many steps the logs should be printed during training
+                UPDATE_PLOT_SAVE_FREQ = 50,      # after how many updates the avg return plot should be saved 
                 N_EVAL_EPISODES = 10,            # how many episodes should be used for evaluation during training
                 GAMMA = 0.99,
-                N_ENV = 64,
+                N_ENV = 16,
+                CHECKPOINT_SAVE_FREQ = 100000,   # after how many steps the full checkpoint should be saved during training
+                CHECKPOINT_NAME = "ckpt.pt",     # name used to save the full training checkpoint (WARNING: it will also contain the ReplayMemory, make sure you have enough ram)
+                MODEL_NAME = "model.pt",         # name used to save the inference model, only saved when a new best score is reached
                 DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
 
                 # agent parameters 
@@ -27,7 +31,6 @@ params = Params(
                 MEMORY_BATCH_SIZE = 128,
                 GRADIENT_STEPS = 200,            # how many gradient steps should be done in the update function, same value as buffer size to have a updates/data ratio close to 1
                 VALUE_LR = 1e-3,
-                MODEL_NAME_VAL = "value_net.pt", # how the new model will be saved
                 UPDATE_TARGET_NET_FREQ = 1000,   # after how many steps the target net should be updated
                 USE_DECAY = True,                # use decay for exploration parameter
                 EPS_LIN_DECAY = 1e-5,
@@ -36,25 +39,6 @@ params = Params(
                 ALGO_NAME = "dql"
 
                )
-
-
-class ReplayMemory:
-    
-    def __init__(self, maxlen):
-        
-        self.buffer = deque(maxlen=maxlen)
-
-    def __len__(self):
-
-        return len(self.buffer)
-
-    def append(self, element):
-
-        self.buffer.append(element)
-
-    def sample(self, n):
-
-        return random.sample(self.buffer, n)
 
 
 class DQLAgent:
@@ -88,11 +72,17 @@ class DQLAgent:
         self.eps_lin_decay = parameters.EPS_LIN_DECAY
         self.update_target_net_freq = parameters.UPDATE_TARGET_NET_FREQ
         self.gradient_steps = parameters.GRADIENT_STEPS
+        self.policy_method = parameters.POLICY_METHOD
 
         self.obs_size = parameters.obs_size
         self.action_space_dim = parameters.action_space_dim
         self.continuous_actions = parameters.env_is_continuous
-        self.value_model_checkpoint = parameters.value_model_checkpoint
+        self.checkpoint = parameters.checkpoint
+
+        self.tot_steps = 0
+
+        self.buffer = []
+        self.memory = ReplayMemory(maxlen=self.memory_maxlen)
         
         self.value_net = nn.Sequential(
           nn.Linear(self.obs_size, 64),
@@ -108,28 +98,34 @@ class DQLAgent:
           nn.LeakyReLU(),
           nn.Linear(64, self.action_space_dim)).to(self.device)
 
-        self.target_value_net.load_state_dict(self.value_net.state_dict())
-        
-        if self.value_model_checkpoint:
-            try:
-                self.value_net.load_state_dict(torch.load(self.value_model_checkpoint))
-                print(f"value checkpoint loaded")
-            except Exception as e:
-                print(f"cant load value weights: \n {e} \n")
-        else:
-            print("training a new value net")
-
         self.optim_value = torch.optim.Adam(self.value_net.parameters(), lr = self.value_lr)
+
+        self.checkpoint_handler = CheckpointHandler(self)
+
+        if self.checkpoint:
+            self.load_checkpoint(self.checkpoint, self.device)
+        else:
+            print("no checkpoint, training new networks")
+
         self.mse = torch.nn.MSELoss()
 
-        self.tot_steps = 0
 
-        self.buffer = []
-        self.memory = ReplayMemory(maxlen=self.memory_maxlen)
+    def save_checkpoint(self, checkpoint_path):
+        # save the full training checkpoint
+        self.checkpoint_handler.save(checkpoint_path, full=True)
+
+
+    def save_model(self, checkpoint_path):
+        # save only the model for inference
+        self.checkpoint_handler.save(checkpoint_path, full=False)
+
+
+    def load_checkpoint(self, checkpoint_path, device):
+        # used for both training checkpoints and inference models
+        self.checkpoint_handler.load(checkpoint_path, device)
 
 
     def decay_epsilon(self):
-
         # linear decay
         self.eps = max(self.min_eps, self.eps-self.eps_lin_decay)
 

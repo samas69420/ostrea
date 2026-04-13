@@ -9,7 +9,7 @@ from gymnasium.wrappers import RecordVideo
 from environments import environments_table 
 
 
-def train_model(algo, environment, dry, model_file_pol, model_file_val, notes):
+def train_model(algo, environment, dry, checkpoint, notes):
 
     def evaluate_policy(env, agent, scale_action, episodes=10):
 
@@ -83,8 +83,7 @@ def train_model(algo, environment, dry, model_file_pol, model_file_val, notes):
 
     env, eval_env, env_is_continuous = get_environments_train(environment, params.N_ENV)
 
-    params.value_model_checkpoint = model_file_val
-    params.policy_model_checkpoint = model_file_pol
+    params.checkpoint = checkpoint
     params.env_is_continuous = env_is_continuous
     params.obs_size = env.observation_space.shape[-1]
     params.action_space_dim = env.action_space.shape[-1] if env_is_continuous \
@@ -102,11 +101,9 @@ def train_model(algo, environment, dry, model_file_pol, model_file_val, notes):
         plotter = Plotter(dir_name)
         
         if params.POLICY_METHOD:
-            params.policy_checkpoint = model_file_pol
             params.policy_net = agent.policy_net
             params.policy_optimizer = agent.optim_policy
 
-        params.value_checkpoint = model_file_val
         params.value_net = agent.value_net
         params.value_optimizer = agent.optim_value
 
@@ -153,6 +150,13 @@ def train_model(algo, environment, dry, model_file_pol, model_file_val, notes):
 
             num_steps += 1
 
+            if num_steps % params.CHECKPOINT_SAVE_FREQ == 0:
+
+                if not dry:
+                
+                    checkpoint_path = f"{dir_name}/{params.CHECKPOINT_NAME}"
+                    agent.save_checkpoint(checkpoint_path)
+
             if num_steps % params.PRINT_FREQ_STEPS == 0:
 
                 eval_score = evaluate_policy(eval_env, agent, scale_action, params.N_EVAL_EPISODES)
@@ -166,16 +170,8 @@ def train_model(algo, environment, dry, model_file_pol, model_file_val, notes):
 
                     if not dry:
                         
-                        if params.POLICY_METHOD:
-                            if params.MODEL_NAME_POL:
-                                model_path_pol = f"{dir_name}/{params.MODEL_NAME_POL}"
-                                print(f"saving policy model in {model_path_pol}")
-                                torch.save(agent.policy_net.state_dict(), model_path_pol)
-
-                        if params.MODEL_NAME_VAL:
-                            model_path_val = f"{dir_name}/{params.MODEL_NAME_VAL}"
-                            print(f"saving value model in {model_path_val}")
-                            torch.save(agent.value_net.state_dict(), model_path_val)
+                        model_path = f"{dir_name}/{params.MODEL_NAME}"
+                        agent.save_model(model_path)
 
         if not dry:
             avg_return = buffer_return.mean().item()
@@ -189,7 +185,7 @@ def train_model(algo, environment, dry, model_file_pol, model_file_val, notes):
     env.close()
 
 
-def test_model(algo, environment, model_file_pol, model_file_val, n_runs, record):
+def test_model(algo, environment, checkpoint, n_runs, record):
 
     def get_environment_test(shortname, render_mode):
 
@@ -228,12 +224,10 @@ def test_model(algo, environment, model_file_pol, model_file_val, n_runs, record
     else:
         raise ValueError("invalid algo")
 
-    if model_file_pol  == None and params.POLICY_METHOD:
-        raise ValueError("policy model file undeclared")
-    if model_file_val == None:
-        raise ValueError("value model file undeclared")
+    if checkpoint == None:
+        raise ValueError("checkpoint undeclared")
 
-    print(f"testing models: \n policy: {args.modelpol} \n value: {args.modelval} \n for {args.test} episodes")
+    print(f"testing model from: {checkpoint} for {args.test} episodes")
 
     # some environments go too fast and the render_fps in metadata doesn't help
     render_delay = False 
@@ -263,8 +257,7 @@ def test_model(algo, environment, model_file_pol, model_file_val, n_runs, record
 
     params.DEVICE = torch.device("cpu") #overwrite DEVICE to use only cpu for tests
 
-    params.value_model_checkpoint = model_file_val
-    params.policy_model_checkpoint = model_file_pol
+    params.checkpoint = checkpoint
     params.env_is_continuous = env_is_continuous
     params.obs_size = env.observation_space.shape[-1]
     params.action_space_dim = env.action_space.shape[-1] if env_is_continuous \
@@ -315,6 +308,7 @@ if __name__ == "__main__":
     parser.add_argument('-e', '--environment', metavar = '<cartpole/lander/...>', default = None, help = "what environment should be used")
     parser.add_argument('-mp', '--modelpol', metavar = 'MODELPATH', default = None, help = "load an existing model (policy)")
     parser.add_argument('-mv', '--modelval', metavar = 'MODELPATH', default = None, help = "load an existing model (value)")
+    parser.add_argument('-c', '--checkpoint', metavar = 'CHECKPOINT_PATH', default = None, help = "load a checkpoint")
     parser.add_argument('-a', '--algo',  metavar = '<ppo/dql/...>', default = None, help = "choose an algorithm")
     parser.add_argument('-l', '--list', action='store_true', help = "list all the currently supported algorithms and environments and exit")
     parser.add_argument('-r', '--record', action='store_true', help = "record a vieo of the episodes during testing")
@@ -366,9 +360,9 @@ if __name__ == "__main__":
 
     if args.test:
 
-        test_model(args.algo, args.environment, args.modelpol, args.modelval, args.test, args.record)
+        test_model(args.algo, args.environment, args.checkpoint, args.test, args.record)
         quit()
 
     else:
-        train_model(args.algo, args.environment, args.dry, args.modelpol, args.modelval, args.notes)
+        train_model(args.algo, args.environment, args.dry, args.checkpoint, args.notes)
         quit()

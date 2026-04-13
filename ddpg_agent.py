@@ -1,10 +1,11 @@
 import torch
-import random
 import torch.nn as nn
 import gymnasium
-from collections import deque
 from torch.distributions.normal import Normal
 from parameters import Params
+from checkpoint import CheckpointHandler
+from replaymemory import ReplayMemory
+
 
 params = Params(
 
@@ -18,13 +19,14 @@ params = Params(
                 N_EVAL_EPISODES = 10,            # how many episodes should be used for evaluation during training
                 GAMMA = 0.99,
                 N_ENV = 64,
+                CHECKPOINT_SAVE_FREQ = 100000,   # after how many steps the full checkpoint should be saved during training
+                CHECKPOINT_NAME = "ckpt.pt",     # name used to save the full training checkpoint (WARNING: it will also contain the ReplayMemory, make sure you have enough ram)
+                MODEL_NAME = "model.pt",         # name used to save the inference model, only saved when a new best score is reached
                 DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
 
                 # agent parameters 
 
                 WARMUP = 3000,                   # warmup steps without any update
-                MODEL_NAME_POL = "policy.pt",
-                MODEL_NAME_VAL = "value_net.pt",
                 MEMORY_MAXLEN = 500_000,
                 MEMORY_BATCH_SIZE = 256,
                 GRADIENT_STEPS = 100,            # how many gradient steps should be done in the update function, same value as buffer size to have a updates/data ratio close to 1
@@ -36,25 +38,6 @@ params = Params(
                 ALGO_NAME = "ddpg"
 
                )
-
-
-class ReplayMemory:
-    
-    def __init__(self, maxlen):
-        
-        self.buffer = deque(maxlen=maxlen)
-
-    def __len__(self):
-
-        return len(self.buffer)
-
-    def append(self, element):
-
-        self.buffer.append(element)
-
-    def sample(self, n):
-
-        return random.sample(self.buffer, n)
 
 
 class DDPGAgent:
@@ -78,6 +61,8 @@ class DDPGAgent:
         if not parameters.env_is_continuous:
             raise ValueError("DDPG only works for continuous action spaces")
 
+        # extract the hardcoded values from parameters
+
         self.gamma = parameters.GAMMA
         self.value_lr =  parameters.VALUE_LR
         self.policy_lr = parameters.POLICY_LR
@@ -88,11 +73,13 @@ class DDPGAgent:
         self.noise_mag = parameters.NOISE_MAG
         self.device = parameters.DEVICE
         self.gradient_steps = parameters.GRADIENT_STEPS 
+        self.policy_method = parameters.POLICY_METHOD
+
+        # extract the other values added before calling the constructor
 
         self.obs_size = parameters.obs_size
         self.action_space_dim = parameters.action_space_dim
-        self.value_model_checkpoint = parameters.value_model_checkpoint
-        self.policy_model_checkpoint = parameters.policy_model_checkpoint
+        self.checkpoint = parameters.checkpoint
 
         value_net_input_dim = self.obs_size + self.action_space_dim
 
@@ -135,24 +122,6 @@ class DDPGAgent:
           nn.LeakyReLU(),
           nn.Linear(64, 1)).to(self.device) 
 
-        if self.policy_model_checkpoint:
-            try:
-                self.policy_net.load_state_dict(torch.load(self.policy_model_checkpoint, map_location = self.device))
-                print(f"policy checkpoint loaded")
-            except Exception as e:
-                print(f"cant load policy weights: \n {e} \n")
-        else:
-            print("training a new policy net")
-
-        if self.value_model_checkpoint:
-            try:
-                self.value_net.load_state_dict(torch.load(self.value_model_checkpoint, map_location = self.device))
-                print(f"value checkpoint loaded")
-            except Exception as e:
-                print(f"cant load value weights: \n {e} \n")
-        else:
-            print("training a new value net")
-
         self.target_value_net.load_state_dict(self.value_net.state_dict())
         self.target_policy_net.load_state_dict(self.policy_net.state_dict())
 
@@ -162,7 +131,29 @@ class DDPGAgent:
         self.optim_value = torch.optim.Adam(self.value_net.parameters(),
                           lr = self.value_lr)
 
+        self.checkpoint_handler = CheckpointHandler(self)
+
+        if self.checkpoint:
+            self.load_checkpoint(self.checkpoint, self.device)
+        else:
+            print("no checkpoint, training new networks")
+
         self.mse = torch.nn.MSELoss()
+
+
+    def save_checkpoint(self, checkpoint_path):
+        # save the full training checkpoint
+        self.checkpoint_handler.save(checkpoint_path, full=True)
+
+
+    def save_model(self, checkpoint_path):
+        # save only the model for inference
+        self.checkpoint_handler.save(checkpoint_path, full=False)
+
+
+    def load_checkpoint(self, checkpoint_path, device):
+        # used for both training checkpoints and inference models
+        self.checkpoint_handler.load(checkpoint_path, device)
 
 
     def choose_action_greedy(self, obs):

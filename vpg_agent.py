@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.distributions.categorical import Categorical
 from parameters import Params
+from checkpoint import CheckpointHandler
 
 params = Params(
 
@@ -16,14 +17,15 @@ params = Params(
                 N_EVAL_EPISODES = 10,            # how many episodes should be used for evaluation during training
                 GAMMA = 0.99,
                 N_ENV = 64,
+                CHECKPOINT_SAVE_FREQ = 100000,   # after how many steps the full checkpoint should be saved during training
+                CHECKPOINT_NAME = "ckpt.pt",     # name used to save the full training checkpoint 
+                MODEL_NAME = "model.pt",         # name used to save the inference model, only saved when a new best score is reached
                 DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
 
                 # agent parameters 
 
                 SEPARATE_COV_PARAMS = True,      # if cov matrix should not be learned by policy net
                 DIAGONAL_COV_MATRIX = True,      # learn a diagonal or full cov matrix
-                MODEL_NAME_POL = "policy.pt",    # how the new model will be saved
-                MODEL_NAME_VAL = "value_net.pt", 
                 MIN_COV = 1e-2,                  # minimum value allowed for diagonal cov matrix
                 VALUE_EPOCHS = 5,
                 VALUE_BATCH_SIZE = 128,
@@ -93,14 +95,14 @@ class VPGAgent:
         self.policy_lr = parameters.POLICY_LR
         self.value_lr = parameters.VALUE_LR
         self.beta = parameters.BETA
+        self.policy_method = parameters.POLICY_METHOD
 
         # extract the other values added before calling the constructor
 
         self.obs_size = parameters.obs_size
         self.action_space_dim = parameters.action_space_dim
         self.continuous_actions = parameters.env_is_continuous
-        self.value_model_checkpoint = parameters.value_model_checkpoint
-        self.policy_model_checkpoint = parameters.policy_model_checkpoint
+        self.checkpoint = parameters.checkpoint
 
         self.buffer = []
 
@@ -137,24 +139,6 @@ class VPGAgent:
           nn.LeakyReLU(),
           nn.Linear(50, 1)).to(self.device)
 
-        if self.policy_model_checkpoint:
-            try:
-                self.policy_net.load_state_dict(torch.load(self.policy_model_checkpoint, map_location = self.device))
-                print(f"policy checkpoint loaded")
-            except Exception as e:
-                print(f"cant load policy weights: \n {e} \n")
-        else:
-            print("training a new policy net")
-
-        if self.value_model_checkpoint:
-            try:
-                self.value_net.load_state_dict(torch.load(self.value_model_checkpoint, map_location = self.device))
-                print(f"value checkpoint loaded")
-            except Exception as e:
-                print(f"cant load value weights: \n {e} \n")
-        else:
-            print("training a new value net")
-
         # all trainable params
 
         all_policy_params = list(self.policy_net.parameters())
@@ -173,7 +157,29 @@ class VPGAgent:
         self.optim_value = torch.optim.Adam(self.value_net.parameters(),
                            lr = self.value_lr)
 
+        self.checkpoint_handler = CheckpointHandler(self)
+
+        if self.checkpoint:
+            self.load_checkpoint(self.checkpoint, self.device)
+        else:
+            print("no checkpoint, training new networks")
+
         self.mse = torch.nn.MSELoss()
+
+
+    def save_checkpoint(self, checkpoint_path):
+        # save the full training checkpoint
+        self.checkpoint_handler.save(checkpoint_path, full=True)
+
+
+    def save_model(self, checkpoint_path):
+        # save only the model for inference
+        self.checkpoint_handler.save(checkpoint_path, full=False)
+
+
+    def load_checkpoint(self, checkpoint_path, device):
+        # used for both training checkpoints and inference models
+        self.checkpoint_handler.load(checkpoint_path, device)
 
 
     def choose_action(self, obs):
