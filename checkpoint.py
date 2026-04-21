@@ -145,5 +145,5 @@ class CheckpointHandler:
         if 'memory' in checkpoint:
             if checkpoint['memory']:
                 self.agent.memory = checkpoint['memory']
-                print(f"loaded memory")
+                print(f"loaded memory - size: {len(self.agent.memory)}")
 
