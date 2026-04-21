@@ -1,22 +1,22 @@
-environments_table = {}
-
-environments_table["cartpole"]               = {"full": "CartPole-v1", "is_continuous": False,              "args": None}
-environments_table["lander"]                 = {"full": "LunarLander-v3", "is_continuous": False,           "args": {'gravity': -10.0}}
-environments_table["lander_continuous"]      = {"full": "LunarLander-v3", "is_continuous": True,            "args": {'gravity': -10.0, 'continuous': True}}
-environments_table["cheetah"]                = {"full": "HalfCheetah-v5", "is_continuous": True,            "args": {'ctrl_cost_weight': 0.1}}
-environments_table["humanoid"]               = {"full": "Humanoid-v5", "is_continuous": True,               "args": None}
-environments_table["ant"]                    = {"full": "Ant-v5", "is_continuous": True,                    "args": None}
-environments_table["walker"]                 = {"full": "Walker2d-v5", "is_continuous": True,               "args": None}
-environments_table["bipedal"]                = {"full": "BipedalWalker-v3", "is_continuous": True,          "args": {'hardcore': False}}
-environments_table["bipedal_hardcore"]       = {"full": "BipedalWalker-v3", "is_continuous": True,          "args": {'hardcore': True}}
-environments_table["acrobot"]                = {"full": "Acrobot-v1", "is_continuous": False,               "args": None}
-environments_table["reacher"]                = {"full": "Reacher-v5", "is_continuous": True,                "args": {'reward_dist_weight': 5.}}
-environments_table["mountaincar_continuous"] = {"full": "MountainCarContinuous-v0", "is_continuous": True,  "args": None}
-environments_table["mountaincar"]            = {"full": "MountainCar-v0", "is_continuous": False,           "args": None}
-environments_table["pendulum"]               = {"full": "Pendulum-v1", "is_continuous": True,               "args": {'g': 9.81}}
-environments_table["pusher"]                 = {"full": "Pusher-v5", "is_continuous": True,                 "args": None}
-environments_table["hopper"]                 = {"full": "Hopper-v5", "is_continuous": True,                 "args": None}
-environments_table["humanoid_standup"]       = {"full": "HumanoidStandup-v5", "is_continuous": True,        "args": None}
-environments_table["inverted_d_pendulum"]    = {"full": "InvertedDoublePendulum-v5", "is_continuous": True, "args": None}
-environments_table["inverted_pendulum"]      = {"full": "InvertedPendulum-v5", "is_continuous": True,       "args": None}
-environments_table["swimmer"]                = {"full": "Swimmer-v5", "is_continuous": True,                "args": None}
+environments_table = {
+    "cartpole":                {"full": "CartPole-v1", "is_continuous": False,              "args": None},
+    "lander":                  {"full": "LunarLander-v3", "is_continuous": False,           "args": {'gravity': -10.0}},
+    "lander_continuous":       {"full": "LunarLander-v3", "is_continuous": True,            "args": {'gravity': -10.0, 'continuous': True}},
+    "cheetah":                 {"full": "HalfCheetah-v5", "is_continuous": True,            "args": {'ctrl_cost_weight': 0.1}},
+    "humanoid":                {"full": "Humanoid-v5", "is_continuous": True,               "args": None},
+    "ant":                     {"full": "Ant-v5", "is_continuous": True,                    "args": None},
+    "walker":                  {"full": "Walker2d-v5", "is_continuous": True,               "args": None},
+    "bipedal":                 {"full": "BipedalWalker-v3", "is_continuous": True,          "args": {'hardcore': False}},
+    "bipedal_hardcore":        {"full": "BipedalWalker-v3", "is_continuous": True,          "args": {'hardcore': True}},
+    "acrobot":                 {"full": "Acrobot-v1", "is_continuous": False,               "args": None},
+    "reacher":                 {"full": "Reacher-v5", "is_continuous": True,                "args": {'reward_dist_weight': 5.}},
+    "mountaincar_continuous":  {"full": "MountainCarContinuous-v0", "is_continuous": True,  "args": None},
+    "mountaincar":             {"full": "MountainCar-v0", "is_continuous": False,           "args": None},
+    "pendulum":                {"full": "Pendulum-v1", "is_continuous": True,               "args": {'g': 9.81}},
+    "pusher":                  {"full": "Pusher-v5", "is_continuous": True,                 "args": None},
+    "hopper":                  {"full": "Hopper-v5", "is_continuous": True,                 "args": None},
+    "humanoid_standup":        {"full": "HumanoidStandup-v5", "is_continuous": True,        "args": None},
+    "inverted_d_pendulum":     {"full": "InvertedDoublePendulum-v5", "is_continuous": True, "args": None},
+    "inverted_pendulum":       {"full": "InvertedPendulum-v5", "is_continuous": True,       "args": None},
+    "swimmer":                 {"full": "Swimmer-v5", "is_continuous": True,                "args": None}
+}
