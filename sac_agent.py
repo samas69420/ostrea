@@ -39,6 +39,7 @@ params = Params(
                 TAU = 0.01,                      # soft update parameter for target nets
                 MAX_LOGVAR = 2.,
                 MIN_LOGVAR = -20.,
+                USE_DOUBLE_Q_NET = True,
                 POLICY_METHOD = True,
                 ALGO_NAME = "sac"
 
@@ -95,6 +96,7 @@ class SACAgent:
         self.max_logvar = parameters.MAX_LOGVAR
         self.min_logvar = parameters.MIN_LOGVAR
         self.policy_method = parameters.POLICY_METHOD
+        self.double_q = parameters.USE_DOUBLE_Q_NET
 
         # extract the other values added before calling the constructor
 
@@ -103,17 +105,17 @@ class SACAgent:
         self.continuous_actions = parameters.env_is_continuous
         self.checkpoint = parameters.checkpoint
 
-        self.log_alpha = torch.nn.Parameter(torch.rand(1).to(self.device))
+        self.log_alpha = torch.nn.Parameter(torch.zeros(1).to(self.device))
 
         if self.continuous_actions:
             policy_net_output_dim = 2*self.action_space_dim 
-            q_net_input_dim = self.obs_size + self.action_space_dim
-            q_net_output_dim = 1
+            value_net_input_dim = self.obs_size + self.action_space_dim
+            value_net_output_dim = 1
             self.target_h = -self.action_space_dim
         else:
             policy_net_output_dim = self.action_space_dim
-            q_net_input_dim = self.obs_size
-            q_net_output_dim = self.action_space_dim
+            value_net_input_dim = self.obs_size
+            value_net_output_dim = self.action_space_dim
             self.target_h = parameters.TARGET_H
 
         self.buffer = []
@@ -121,69 +123,54 @@ class SACAgent:
 
         self.memory = ReplayMemory(maxlen=self.memory_maxlen)
 
-        #self.policy_net = nn.Sequential(
-        #  nn.Linear(self.obs_size, 100),
-        #  nn.Tanh(),
-        #  nn.Linear(100, 100),
-        #  nn.Tanh(),
-        #  nn.Linear(100, policy_net_output_dim)).to(self.device)
-
-        #self.q_net = nn.Sequential(
-        #  nn.Linear(q_net_input_dim , 100),
-        #  nn.LeakyReLU(),
-        #  nn.Linear(100, 100),
-        #  nn.LeakyReLU(),
-        #  nn.Linear(100, q_net_output_dim)).to(self.device) 
-
-        #self.target_q_net = nn.Sequential(
-        #  nn.Linear(q_net_input_dim , 100),
-        #  nn.LeakyReLU(),
-        #  nn.Linear(100, 100),
-        #  nn.LeakyReLU(),
-        #  nn.Linear(100, q_net_output_dim)).to(self.device) 
-
         self.policy_net = nn.Sequential(
-          nn.Linear(self.obs_size, 512),
+          nn.Linear(self.obs_size, 100),
           nn.LeakyReLU(),
-          nn.Linear(512, 512),
+          nn.Linear(100, 100),
           nn.LeakyReLU(),
-          nn.Linear(512, 512),
-          nn.LeakyReLU(),
-          nn.Linear(512, 512),
-          nn.LeakyReLU(),
-          nn.Linear(512, policy_net_output_dim)).to(self.device)
+          nn.Linear(100, policy_net_output_dim)).to(self.device)
 
-        self.q_net = nn.Sequential(
-          nn.Linear(q_net_input_dim , 512),
+        self.value_net = nn.Sequential(
+          nn.Linear(value_net_input_dim , 100),
           nn.LeakyReLU(),
-          nn.Linear(512, 512),
+          nn.Linear(100, 100),
           nn.LeakyReLU(),
-          nn.Linear(512, 512),
-          nn.LeakyReLU(),
-          nn.Linear(512, 512),
-          nn.LeakyReLU(),
-          nn.Linear(512, q_net_output_dim)).to(self.device) 
+          nn.Linear(100, value_net_output_dim)).to(self.device)
 
-        self.target_q_net = nn.Sequential(
-          nn.Linear(q_net_input_dim , 512),
+        self.target_value_net = nn.Sequential(
+          nn.Linear(value_net_input_dim , 100),
           nn.LeakyReLU(),
-          nn.Linear(512, 512),
+          nn.Linear(100, 100),
           nn.LeakyReLU(),
-          nn.Linear(512, 512),
-          nn.LeakyReLU(),
-          nn.Linear(512, 512),
-          nn.LeakyReLU(),
-          nn.Linear(512, q_net_output_dim)).to(self.device) 
+          nn.Linear(100, value_net_output_dim)).to(self.device)
 
-        self.target_q_net.load_state_dict(self.q_net.state_dict())
+        self.target_value_net.load_state_dict(self.value_net.state_dict())
+        value_nets_params = list(self.value_net.parameters())
 
-        # because main script use value as name TODO change this
-        self.value_net = self.q_net 
+        if self.double_q:
+
+            self.sec_value_net = nn.Sequential(
+              nn.Linear(value_net_input_dim , 100),
+              nn.LeakyReLU(),
+              nn.Linear(100, 100),
+              nn.LeakyReLU(),
+              nn.Linear(100, value_net_output_dim)).to(self.device)
+
+            self.target_sec_value_net = nn.Sequential(
+              nn.Linear(value_net_input_dim , 100),
+              nn.LeakyReLU(),
+              nn.Linear(100, 100),
+              nn.LeakyReLU(),
+              nn.Linear(100, value_net_output_dim)).to(self.device)
+
+            [value_nets_params.append(e) for e in self.sec_value_net.parameters()]
+
+            self.target_sec_value_net.load_state_dict(self.sec_value_net.state_dict())
 
         self.optim_policy = torch.optim.Adam(self.policy_net.parameters(),
                           lr = self.policy_lr)
 
-        self.optim_value = torch.optim.Adam(self.q_net.parameters(),
+        self.optim_value = torch.optim.Adam(value_nets_params,
                           lr = self.value_lr)
 
         self.optim_temp = torch.optim.Adam([self.log_alpha],
@@ -306,6 +293,8 @@ class SACAgent:
                 # with continuous actions to compute the target it is necessary
                 # to evaluate Q on sampled next actions
                 # Q(S_t,A_t) <- R_t+1 + not_done*gamma*Q(S_t+1,A_t+1) - alpha*log(pi(S_t+1,A_t+1))
+                # with double q:
+                # Q1/2(S_t,A_t) <- R_t+1 + not_done*gamma*min(Q1(S_t+1,A_t+1),Q2(S_t+1,A_t+1)) - alpha*log(pi(S_t+1,A_t+1))
 
                 with torch.no_grad():
 
@@ -331,11 +320,20 @@ class SACAgent:
                     next_action_log_probs -= torch.log(1-torch.tanh(next_actions_unbounded)**2+self.numerical_epsilon).sum(-1)
 
                     next_s_a_pairs = torch.concat((next_states, next_actions),dim=-1)
-                    targets = rewards + self.gamma*(1-dones.to(int))*(self.target_q_net(next_s_a_pairs).squeeze() - torch.exp(self.log_alpha.detach()) * next_action_log_probs)
+                    if self.double_q:
+                        min_q = torch.min(self.target_value_net(next_s_a_pairs).squeeze(),self.target_sec_value_net(next_s_a_pairs).squeeze())
+                        targets = rewards + self.gamma*(1-dones.to(int))*(min_q - torch.exp(self.log_alpha.detach()) * next_action_log_probs)
+                    else:
+                        targets = rewards + self.gamma*(1-dones.to(int))*(self.target_value_net(next_s_a_pairs).squeeze() - torch.exp(self.log_alpha.detach()) * next_action_log_probs)
                     targets = targets.to(torch.float32) 
 
                 s_a_pairs = torch.concat((states,actions),dim=-1)
-                Q_s_a = self.q_net(s_a_pairs).squeeze(-1)
+
+                if self.double_q:
+                    Q1_s_a = self.value_net(s_a_pairs).squeeze(-1)
+                    Q2_s_a = self.sec_value_net(s_a_pairs).squeeze(-1)
+                else:
+                    Q_s_a = self.value_net(s_a_pairs).squeeze(-1)
 
             else:
                 
@@ -351,14 +349,26 @@ class SACAgent:
                     next_probs_dist = Categorical(logits=logits)
                     entropy = next_probs_dist.entropy()
                     probs = next_probs_dist.probs
-                    next_values = (probs*(self.target_q_net(next_states))).sum(-1)
+                    if self.double_q:
+                        next_values = torch.min((probs*(self.target_value_net(next_states))).sum(-1),(probs*(self.target_sec_value_net(next_states))).sum(-1))
+                    else:
+                        next_values = (probs*(self.target_value_net(next_states))).sum(-1)
                     targets = rewards + self.gamma*(1-dones.to(int))*(next_values + torch.exp(self.log_alpha.detach())*entropy)
                     targets = targets.to(torch.float32) 
 
-                Q_s = self.q_net(states)
-                Q_s_a = torch.gather(Q_s,-1,actions.unsqueeze(1)).squeeze()
+                if self.double_q:
+                    Q1_s = self.value_net(states)
+                    Q1_s_a = torch.gather(Q1_s,-1,actions.unsqueeze(1)).squeeze()
+                    Q2_s = self.sec_value_net(states)
+                    Q2_s_a = torch.gather(Q2_s,-1,actions.unsqueeze(1)).squeeze()
+                else:
+                    Q_s = self.value_net(states)
+                    Q_s_a = torch.gather(Q_s,-1,actions.unsqueeze(1)).squeeze()
 
-            loss = self.mse(targets,Q_s_a)
+            if self.double_q:
+                loss = self.mse(targets,Q1_s_a)+self.mse(targets,Q2_s_a)
+            else:
+                loss = self.mse(targets,Q_s_a)
 
             self.optim_value.zero_grad()
             loss.backward()
@@ -381,7 +391,12 @@ class SACAgent:
                 actions = torch.tanh(actions_unbounded)
 
                 s_a_pairs = torch.concat((states,actions),dim=-1)
-                Q_s_a = self.q_net(s_a_pairs).squeeze(-1)
+                if self.double_q:
+                    Q1_s_a = self.value_net(s_a_pairs).squeeze(-1)
+                    Q2_s_a = self.sec_value_net(s_a_pairs).squeeze(-1)
+                    Q_s_a = torch.min(Q1_s_a,Q2_s_a)
+                else:
+                    Q_s_a = self.value_net(s_a_pairs).squeeze(-1)
 
                 cov = torch.diag_embed(var)
                 distributions = MultivariateNormal(means,cov)
@@ -399,7 +414,10 @@ class SACAgent:
                 probs_dist = Categorical(logits=logits)
                 entropy = probs_dist.entropy()
                 probs = probs_dist.probs
-                values = (probs*(self.q_net(states))).sum(-1)
+                if self.double_q:
+                    values = torch.min((probs*(self.value_net(states).detach())).sum(-1),(probs*(self.sec_value_net(states).detach())).sum(-1))
+                else:
+                    values = (probs*(self.value_net(states).detach())).sum(-1)
                 sac_objective = -(values + torch.exp(self.log_alpha.detach())*entropy).mean()
 
             self.optim_policy.zero_grad()
@@ -433,15 +451,18 @@ class SACAgent:
 
             # update target network
 
-            for target_param, param in zip(self.target_q_net.parameters(), self.q_net.parameters()):
+            for target_param, param in zip(self.target_value_net.parameters(), self.value_net.parameters()):
                 target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
+
+            if self.double_q:
+                for target_param, param in zip(self.target_sec_value_net.parameters(), self.sec_value_net.parameters()):
+                    target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
 
 if __name__ == "__main__":
 
     print(f"using device {params.DEVICE}")
 
-    params.value_model_checkpoint = None 
-    params.policy_model_checkpoint = None
+    params.checkpoint = None
     params.env_is_continuous = False 
     params.obs_size = 2
     params.action_space_dim = 3
