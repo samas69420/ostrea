@@ -30,6 +30,7 @@ def train_model(algo, environment, dry, checkpoint, notes):
                     action = agent.choose_action_greedy(state_t.squeeze()).unsqueeze(0)
 
                     if scale_action:
+                        # assuming action bounds are symmetric
                         scaled_action = action*env.action_space.high.max()
                     else:
                         scaled_action = action
@@ -115,6 +116,7 @@ def train_model(algo, environment, dry, checkpoint, notes):
     updates = 0
     best_score = -torch.inf
     eval_score = None
+    some_episode_was_truncated = False
 
     scale_action = bounded_actions and env_is_continuous
 
@@ -132,6 +134,7 @@ def train_model(algo, environment, dry, checkpoint, notes):
             action,logprob = agent.choose_action(S_t)
 
             if scale_action:
+                # assuming action bounds are symmetric
                 scaled_action = action*env.action_space.high.max()
             else:
                 scaled_action = action
@@ -140,11 +143,26 @@ def train_model(algo, environment, dry, checkpoint, notes):
 
             S_t_plus_1 = torch.tensor(observation, dtype=torch.float32).to(params.DEVICE)
 
-            episode_over = torch.tensor(terminated).logical_or(torch.tensor(truncated)).to(params.DEVICE)
+            episode_over = torch.tensor(terminated).to(params.DEVICE)
 
             reward = torch.tensor(reward).to(params.DEVICE)
 
-            agent.buffer.append((S_t, action, reward, S_t_plus_1, episode_over, logprob))
+            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+            # ignore the current transition if any of the environments have reset               #
+            # without this check the buffer will contain transitions with                       #
+            # S_t = last state of episode N just before truncation                              #
+            # S_t_plus_1 = first state of the episode N+1 after reset                           #
+            # this condition should be avoided since this transition would not be the result of #
+            # the environment's dynamics and for this reason it shouldn't be learned            #
+                                                                                                #
+            if not some_episode_was_truncated:                                                  #
+                agent.buffer.append((S_t, action, reward, S_t_plus_1, episode_over, logprob))   #
+            if truncated.any():                                                                 #
+                some_episode_was_truncated = True                                               #
+            else:                                                                               #
+                some_episode_was_truncated = False                                              #
+                                                                                                #
+            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
             buffer_return += reward
 
@@ -227,7 +245,7 @@ def test_model(algo, environment, checkpoint, n_runs, record):
     if checkpoint == None:
         raise ValueError("checkpoint undeclared")
 
-    print(f"testing model from: {checkpoint} for {args.test} episodes")
+    print(f"testing model for {args.test} episodes")
 
     # some environments go too fast and the render_fps in metadata doesn't help
     render_delay = False 
@@ -279,6 +297,7 @@ def test_model(algo, environment, checkpoint, n_runs, record):
                 action = agent.choose_action_greedy(torch.tensor(observation).to(torch.float))
 
                 if bounded_actions and env_is_continuous:
+                    # assuming action bounds are symmetric
                     scaled_action = action*env.action_space.high.max()
                 else:
                     scaled_action = action
