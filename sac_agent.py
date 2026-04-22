@@ -32,14 +32,15 @@ params = Params(
                 MEMORY_BATCH_SIZE = 256,
                 GRADIENT_STEPS = 100,            # how many gradient steps should be done in the update function, same value as buffer size to have a updates/data ratio close to 1
                 NUMERICAL_EPSILON = 1e-6,        # small value for numerical stabilty
-                TARGET_H = 0.1,                  # target entropy (only for discrete action spaces, computed automatically in continuous case)
+                TARGET_H = "auto",               # target entropy, if "auto" it will be set to -|A| for continuous actions and to 0.5*log(|A|) (half the max value) for discrete actions
+                ALPHA = "auto",                  # fixed or learnable temperature, if "auto" it will be learned and tuned automatically during training
                 VALUE_LR =  3e-4,
                 POLICY_LR = 3e-4,
                 ALPHA_LR =  1e-3,
                 TAU = 0.01,                      # soft update parameter for target nets
                 MAX_LOGVAR = 2.,
                 MIN_LOGVAR = -20.,
-                USE_DOUBLE_Q_NET = True,
+                USE_DOUBLE_Q_NET = True,         # more memory usage since two more networks will be trained (5 nets total) but more accurate Qvalues estimation and usually faster convergence
                 POLICY_METHOD = True,
                 ALGO_NAME = "sac"
 
@@ -58,18 +59,9 @@ class SACAgent:
     the parameters (means and cov matrix) of the n-dimensional normal 
     distribution the actions will be sampled from
 
-    with discrete actions the policy network will predict the logits
+    with discrete actions the policy network will compute the logits
     (unnormalized scores) that will be used with categorical distribution
-    to compute the probability of each one of the possible n actions 
-
-    this implementation currently uses only one value network 
-    (and its "target version" for a total of 3 networks)
-
-    the temperature parameter will be learned but reinitialized in 
-    each new training session
-
-    target entropy is used as hyperparameter for discrete actions only
-    and it is automatically set to -|A| for continuous actions
+    to get the probability of each one of the possible n actions
 
     this implementation assumes actions in the range [-1,1]
     
@@ -86,6 +78,7 @@ class SACAgent:
         self.value_lr =  parameters.VALUE_LR
         self.policy_lr = parameters.POLICY_LR
         self.alpha_lr = parameters.ALPHA_LR
+        self.alpha = parameters.ALPHA
         self.memory_maxlen = parameters.MEMORY_MAXLEN
         self.memory_batch_size = parameters.MEMORY_BATCH_SIZE
         self.gradient_steps = parameters.GRADIENT_STEPS 
@@ -105,18 +98,25 @@ class SACAgent:
         self.continuous_actions = parameters.env_is_continuous
         self.checkpoint = parameters.checkpoint
 
-        self.log_alpha = torch.nn.Parameter(torch.zeros(1).to(self.device))
+        if self.alpha == "auto":
+            self.log_alpha = torch.nn.Parameter(torch.zeros(1).to(self.device))
+        else:
+            self.log_alpha = torch.log(torch.tensor(self.alpha).to(self.device))
 
         if self.continuous_actions:
             policy_net_output_dim = 2*self.action_space_dim 
             value_net_input_dim = self.obs_size + self.action_space_dim
             value_net_output_dim = 1
-            self.target_h = -self.action_space_dim
         else:
             policy_net_output_dim = self.action_space_dim
             value_net_input_dim = self.obs_size
             value_net_output_dim = self.action_space_dim
-            self.target_h = parameters.TARGET_H
+
+        if parameters.TARGET_H == "auto":
+            self.target_h = torch.tensor(-self.action_space_dim).to(self.device) if self.continuous_actions \
+            else 0.5*torch.log(torch.tensor(self.action_space_dim)).to(self.device)
+        else:
+            self.target_h = torch.tensor(parameters.TARGET_H).to(self.device)
 
         self.buffer = []
         self.tot_steps = 0
@@ -173,8 +173,9 @@ class SACAgent:
         self.optim_value = torch.optim.Adam(value_nets_params,
                           lr = self.value_lr)
 
-        self.optim_temp = torch.optim.Adam([self.log_alpha],
-                          lr = self.alpha_lr)
+        if self.alpha == "auto":
+            self.optim_temp = torch.optim.Adam([self.log_alpha],
+                              lr = self.alpha_lr)
 
         self.checkpoint_handler = CheckpointHandler(self)
 
@@ -426,24 +427,22 @@ class SACAgent:
 
             # update alpha
 
-            if self.continuous_actions:
+            if self.alpha == "auto":
 
-                # log_alpha is used instead of alpha because the algorithm is 
-                # actually learning the log itself, in this way get the 
-                # right gradient 
+                # log_alpha is used instead of alpha because the algorithm is
+                # actually learning the log itself, in this way it gets the
+                # right gradient
 
-                alpha_loss = (self.log_alpha * (-1*logprobs.detach() - self.target_h)).mean()
+                if self.continuous_actions:
 
-                self.optim_temp.zero_grad()
-                alpha_loss.backward()
-                self.optim_temp.step()
+                    alpha_loss = (self.log_alpha * (-1*logprobs.detach() - self.target_h)).mean()
 
-            else:
+                else:
 
-                # with discrete actions the entropy can be calculated
-                # in each state and the errors can be averaged
+                    # with discrete actions the entropy can be computed exactly
+                    # in each state and the errors can be averaged
 
-                alpha_loss = (self.log_alpha * (entropy.detach() - self.target_h)).mean()
+                    alpha_loss = (self.log_alpha * (entropy.detach() - self.target_h)).mean()
 
                 self.optim_temp.zero_grad()
                 alpha_loss.backward()

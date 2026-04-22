@@ -17,8 +17,6 @@
     * use the main q net as second net
     * state indipendent variance
     * optimize update
-    * add a switch for dynamic or fixed temperature
-    * add a choice for target entropy computation
     * sample multiple next actions to bootstrap
 
 #### ddpg
