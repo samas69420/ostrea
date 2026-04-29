@@ -1,6 +1,6 @@
 import torch
 import os
-from replaymemory import ReplayMemory
+from utils.replaymemory import ReplayMemory
 
 
 # helper funcion to write data firstly to a temp file so the damn oom-killer

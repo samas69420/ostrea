@@ -18,15 +18,15 @@ Even if formally in reinforcement learning V and Q are two different functions h
 
 ## Project structure
 
-The main file is `ostrea.py`, it creates the environment and the agent according to the user's choices and it contains the training loop
+The main file is `src/ostrea.py`, it creates the environment and the agent according to the user's choices and it contains the training loop, the same file is also used to test trained models in inference.
 
-Every algo is implemented in its dedicated "algo\_agent.py" python file, which can also be run independently with `$ python *_agent.py ` to run the algorithm on random data for testing and debugging purposes
+Every algo is implemented in its dedicated "src/agents/algo\_agent.py" python file.
+
+The script `src/test.py` can be used to test the implementations on random fixed data for debugging purposes.
 
 The same training loop is used for all the algorithms, they collect data from the environment for a fixed amount of timesteps to fill a buffer, then they call their own update function to consume that data and empty the buffer.
 
 Algorithms with replay memory like dql will add all the content of the buffer to their internal memory before cleaning it.
-
-Changing the buffer size will also change the frequency of calls to the update function
 
 The agent is periodically tested during training and when it achieves a new best score its inference network (value net for value based methods or the policy net for policy based methods) is saved in the `model.pt` file
 
@@ -107,7 +107,7 @@ To start a new training session run the script specifying the algorithm and the 
 
 For example to train ppo with the discrete lunar lander environment run:
 
-`$ python ostrea.py -a ppo -e lander`
+`$ python src/ostrea.py -a ppo -e lander`
 
 The script will periodically save a full training checkpoint containing everything needed to resume the session (all the nets, optimizers state etc) and also a model file with only the final network needed for inference, the inference model will be saved only if better than the previous one 
 
@@ -119,7 +119,7 @@ To resume a stopped training session run the script specifying the algorithm, th
 
 For example to resume a session started with the previous command run:
 
-`$ python ostrea.py -a ppo -e lander -c path/to/ckpt.pt`
+`$ python src/ostrea.py -a ppo -e lander -c path/to/ckpt.pt`
 
 _NOTE: when loading existing models the script will use the network architectures defined in the chosen algorithm's source file, make sure they are the same_
 
@@ -129,15 +129,23 @@ To test a trained model with N espisodes run the script in test mode with `--tes
 
 For example to test the model trained using ppo in the discrete lunar lander environment for 10 episodes run:
 
-`$ python ostrea.py --test 10 -a ppo -e lander -c path/to/model.pt`
+`$ python src/ostrea.py --test 10 -a ppo -e lander -c path/to/model.pt`
 
 Add also `-r` to export videos of the episodes
 
 _NOTE: when loading existing models the script will use the network architectures defined in the chosen algorithm's source file, make sure they are the same_
 
+#### Test a implementation
+
+To test the implementation of an agent with dummy data for debugging purposes run the test script and specify the algorithm, the script will generate some random data and simulate one iteration of the training loop
+
+For example to test the implementation of the ppo agent run
+
+`$ python src/test.py -a ppo`
+
 #### Hyperparameters tuning
 
-Each algorithm's source file defines its own set of hyperameters to be used like learning rates etc. 
+Each algorithm defines its own set of hyperameters to be used like learning rates etc. and it can be found in the `src/parameters/`.
 
 Everything in there can be changed and new parameters can be added directly in the `Params()` call, they will immediately become accessible as attributes of the params object
 
@@ -150,9 +158,9 @@ params = Params(...
 
 print(params.NEWPARAM) 
 ```
-For more details check `parameters.py`
+For more details check `src/utils/parameters.py`
 
-Environment specific parameters (like gravity for lunar lander etc.) can be edited in the environments table in `environments.py`
+Environment specific parameters (like gravity for lunar lander etc.) can be edited in the environments table in `src/environments.py`
 
 ---
 
@@ -187,6 +195,10 @@ https://github.com/user-attachments/assets/12387291-f384-4102-8980-9eebee6e8b04
 humanoid solved using ppo 
 
 https://github.com/user-attachments/assets/ee6561d8-0a50-4235-b0ef-9b8b313188c2
+
+pusher solved using sac
+
+https://github.com/user-attachments/assets/b6eea44b-76a7-4346-ab35-99702d8b34d3
 
 #### honorable mentions
 

@@ -1,50 +1,9 @@
 import torch
 import torch.nn as nn
-import gymnasium
 from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.distributions.categorical import Categorical
-from parameters import Params
-from checkpoint import CheckpointHandler
-from replaymemory import ReplayMemory
-
-
-params = Params(
-
-                # environment/general training parameters 
-
-                SEED = None,                     # seed used with torch
-                MAX_TRAINING_STEPS = 100e6,      # 100M
-                BUFFER_SIZE = 100,               # size of episode buffer that triggers the update
-                PRINT_FREQ_STEPS = 100,          # after how many steps the logs should be printed during training       
-                UPDATE_PLOT_SAVE_FREQ = 100,     # after how many updates the avg return plot should be saved 
-                N_EVAL_EPISODES = 10,            # how many episodes should be used for evaluation during training 
-                GAMMA = 0.99,
-                N_ENV = 32,
-                CHECKPOINT_SAVE_FREQ = 100000,   # after how many steps the full checkpoint should be saved during training
-                CHECKPOINT_NAME = "ckpt.pt",     # name used to save the full training checkpoint (WARNING: it will also contain the ReplayMemory, make sure you have enough ram)
-                MODEL_NAME = "model.pt",         # name used to save the inference model, only saved when a new best score is reached
-                DEVICE = torch.device("cuda:1") if torch.cuda.is_available() else torch.device("cpu"),
-
-                # agent parameters 
-
-                WARMUP = 10000,                  # warmup steps without any update
-                MEMORY_MAXLEN = 500_000,
-                MEMORY_BATCH_SIZE = 256,
-                GRADIENT_STEPS = 100,            # how many gradient steps should be done in the update function, same value as buffer size to have a updates/data ratio close to 1
-                NUMERICAL_EPSILON = 1e-6,        # small value for numerical stabilty
-                TARGET_H = "auto",               # target entropy, if "auto" it will be set to -|A| for continuous actions and to 0.5*log(|A|) (half the max value) for discrete actions
-                ALPHA = "auto",                  # fixed or learnable temperature, if "auto" it will be learned and tuned automatically during training
-                VALUE_LR =  3e-4,
-                POLICY_LR = 3e-4,
-                ALPHA_LR =  1e-3,
-                TAU = 0.01,                      # soft update parameter for target nets
-                MAX_LOGVAR = 2.,
-                MIN_LOGVAR = -20.,
-                USE_DOUBLE_Q_NET = True,         # more memory usage since two more networks will be trained (5 nets total) but more accurate Qvalues estimation and usually faster convergence
-                POLICY_METHOD = True,
-                ALGO_NAME = "sac"
-
-               )
+from utils.checkpoint import CheckpointHandler
+from utils.replaymemory import ReplayMemory
 
 
 class SACAgent:
@@ -456,51 +415,3 @@ class SACAgent:
             if self.double_q:
                 for target_param, param in zip(self.target_sec_value_net.parameters(), self.sec_value_net.parameters()):
                     target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
-
-if __name__ == "__main__":
-
-    print(f"using device {params.DEVICE}")
-
-    params.checkpoint = None
-    params.env_is_continuous = False 
-    params.obs_size = 2
-    params.action_space_dim = 3
-    params.WARMUP = 0
-    params.MEMORY_BATCH_SIZE  = 5
-
-    discrete_agent = SACAgent(params)
-
-    print("discrete agent created")
-
-    params.env_is_continuous = True 
-
-    continuous_agent = SACAgent(params)
-
-    print("continuous agent created")
-
-    # test loop with random data, suppose a vectorized environment and 10 steps
-
-    n_env = params.N_ENV
-
-    state = torch.rand(n_env,2).to(params.DEVICE)
-
-    for t in range(10):
-
-        with torch.no_grad():
-        
-            discrete_actions, disc_log_prob = discrete_agent.choose_action(state)
-            continuous_actions, cont_log_prob = continuous_agent.choose_action(state)
-
-            reward = torch.rand(n_env).to(params.DEVICE)
-            new_state = torch.rand(n_env,2).to(params.DEVICE)
-            done = (torch.ones(n_env) if t % 10 == 0 else torch.zeros(n_env)).to(params.DEVICE)
-
-            discrete_agent.buffer.append((state,discrete_actions,reward,new_state,done))
-            continuous_agent.buffer.append((state,continuous_actions,reward,new_state,done))
-
-            state = new_state
-
-    discrete_agent.update()
-    continuous_agent.update()
-
-    print("update done")

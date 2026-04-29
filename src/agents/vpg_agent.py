@@ -2,43 +2,7 @@ import torch
 import torch.nn as nn
 from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.distributions.categorical import Categorical
-from parameters import Params
-from checkpoint import CheckpointHandler
-
-params = Params(
-
-                # environment/general training parameters 
-
-                SEED = None,                     # seed used with torch
-                MAX_TRAINING_STEPS = 100e6,      # 100M
-                BUFFER_SIZE = 3000,              # size of episode buffer that triggers the update
-                PRINT_FREQ_STEPS = 3000,         # after how many steps the logs should be printed during training
-                UPDATE_PLOT_SAVE_FREQ = 10,      # after how many updates the avg return plot should be saved 
-                N_EVAL_EPISODES = 10,            # how many episodes should be used for evaluation during training
-                GAMMA = 0.99,
-                N_ENV = 64,
-                CHECKPOINT_SAVE_FREQ = 100000,   # after how many steps the full checkpoint should be saved during training
-                CHECKPOINT_NAME = "ckpt.pt",     # name used to save the full training checkpoint 
-                MODEL_NAME = "model.pt",         # name used to save the inference model, only saved when a new best score is reached
-                DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"),
-
-                # agent parameters 
-
-                SEPARATE_COV_PARAMS = True,      # if cov matrix should not be learned by policy net
-                DIAGONAL_COV_MATRIX = True,      # learn a diagonal or full cov matrix
-                MIN_COV = 1e-2,                  # minimum value allowed for diagonal cov matrix
-                VALUE_EPOCHS = 5,
-                VALUE_BATCH_SIZE = 128,
-                VALUE_LR = 1e-3,
-                POLICY_LR = 1e-3,
-                NUMERICAL_EPSILON = 1e-7,        # small value for numerical stability
-                BETA = 5e-3,                     # weight used for entropy
-                ADVANTAGE_TYPE = "GAE",          # type of advantages GAE/TD/MC/None(only returns)
-                GAE_LAMBDA = 0.99,
-                POLICY_METHOD = True,
-                ALGO_NAME = "vpg"
-
-               )
+from utils.checkpoint import CheckpointHandler
 
 
 class VPGAgent:
@@ -74,7 +38,7 @@ class VPGAgent:
     https://proceedings.neurips.cc/paper_files/paper/1999/file/464d828b85b0bed98e80ade0a5c43b0f-Paper.pdf
     """
 
-    def __init__(self, parameters: Params):
+    def __init__(self, parameters):
 
         if parameters.SEED:
             torch.manual_seed(parameters.SEED)
@@ -420,52 +384,3 @@ class VPGAgent:
 
         # clear experience buffer
         self.buffer = []
-
-
-
-if __name__ == "__main__":
-
-    print(f"using device {params.DEVICE}")
-    params.value_model_checkpoint = None 
-    params.policy_model_checkpoint = None
-    params.env_is_continuous = False 
-    params.obs_size = 2
-    params.action_space_dim = 3
-
-    discrete_agent = VPGAgent(params)
-
-    print("discrete agent created")
-
-    params.env_is_continuous = True 
-
-    continuous_agent = VPGAgent(params)
-
-    print("continuous agent created")
-
-    # test loop with random data, suppose a vectorized environment and 10 steps
-
-    n_env = params.N_ENV
-
-    state = torch.rand(n_env,2).to(params.DEVICE)
-
-    for t in range(10):
-
-        with torch.no_grad():
-        
-            discrete_actions, disc_log_prob = discrete_agent.choose_action(state)
-            continuous_actions, cont_log_prob = continuous_agent.choose_action(state)
-
-            reward = torch.rand(n_env).to(params.DEVICE)
-            new_state = torch.rand(n_env,2).to(params.DEVICE)
-            done = (torch.ones(n_env) if t % 10 == 0 else torch.zeros(n_env)).to(params.DEVICE)
-            log_prob = torch.rand(n_env).to(params.DEVICE)
-
-            discrete_agent.buffer.append((state,discrete_actions,reward,new_state,done,log_prob))
-            continuous_agent.buffer.append((state,continuous_actions,reward,new_state,done,log_prob))
-
-            state = new_state
-
-    discrete_agent.update()
-    continuous_agent.update()
-
-    print("update done")

@@ -3,8 +3,8 @@ import torch
 import time
 import argparse
 import os
-from plotter import Plotter
 import datetime
+from utils.plotter import Plotter
 from gymnasium.wrappers import RecordVideo
 from environments import environments_table 
 
@@ -60,24 +60,24 @@ def train_model(algo, environment, dry, checkpoint, notes):
         return env, eval_env, is_continuous
 
     if algo == "ppo":
-        from ppo_agent import PPOAgent as Agent
-        from ppo_agent import params
+        from agents.ppo_agent import PPOAgent as Agent
+        from parameters.ppo_params import params
         bounded_actions = False
     elif algo == "dql":
-        from dql_agent import DQLAgent as Agent
-        from dql_agent import params
+        from agents.dql_agent import DQLAgent as Agent
+        from parameters.dql_params import params
         bounded_actions = False
     elif algo == "sac":
-        from sac_agent import SACAgent as Agent
-        from sac_agent import params
+        from agents.sac_agent import SACAgent as Agent
+        from parameters.sac_params import params
         bounded_actions = True
     elif algo == "vpg":
-        from vpg_agent import VPGAgent as Agent
-        from vpg_agent import params
+        from agents.vpg_agent import VPGAgent as Agent
+        from parameters.vpg_params import params
         bounded_actions = False
     elif algo == "ddpg":
-        from ddpg_agent import DDPGAgent as Agent
-        from ddpg_agent import params
+        from agents.ddpg_agent import DDPGAgent as Agent
+        from parameters.ddpg_params import params
         bounded_actions = True
     else:
         raise ValueError("invalid algo")
@@ -220,24 +220,24 @@ def test_model(algo, environment, checkpoint, n_runs, record):
         return env, is_continuous
 
     if algo == "ppo":
-        from ppo_agent import PPOAgent as Agent
-        from ppo_agent import params
+        from agents.ppo_agent import PPOAgent as Agent
+        from parameters.ppo_params import params
         bounded_actions = False
     elif algo == "dql":
-        from dql_agent import DQLAgent as Agent
-        from dql_agent import params
+        from agents.dql_agent import DQLAgent as Agent
+        from parameters.dql_params import params
         bounded_actions = False
     elif algo == "sac":
-        from sac_agent import SACAgent as Agent
-        from sac_agent import params
+        from agents.sac_agent import SACAgent as Agent
+        from parameters.sac_params import params
         bounded_actions = True
     elif algo == "vpg":
-        from vpg_agent import VPGAgent as Agent
-        from vpg_agent import params
+        from agents.vpg_agent import VPGAgent as Agent
+        from parameters.vpg_params import params
         bounded_actions = False
     elif algo == "ddpg":
-        from ddpg_agent import DDPGAgent as Agent
-        from ddpg_agent import params
+        from agents.ddpg_agent import DDPGAgent as Agent
+        from parameters.ddpg_params import params
         bounded_actions = True
     else:
         raise ValueError("invalid algo")
