@@ -20,7 +20,7 @@ Even if formally in reinforcement learning V and Q are two different functions h
 
 The main file is `src/ostrea.py`, it creates the environment and the agent according to the user's choices and it contains the training loop, the same file is also used to test trained models in inference.
 
-Every algo is implemented in its dedicated "src/agents/algo\_agent.py" python file.
+Every algo is implemented in its dedicated `src/agents/algo_agent.py` python file.
 
 The script `src/test.py` can be used to test the implementations on random fixed data for debugging purposes.
 

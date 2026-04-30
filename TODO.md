@@ -11,6 +11,7 @@
     * record multiple episodes in one file during testing
     * support to other network types other than mlp
     * type hints
+    * add support to asymmetric action spaces in bounded algos
 
 #### sac
     
