@@ -8,6 +8,9 @@ from utils.plotter import Plotter
 from gymnasium.wrappers import RecordVideo
 from environments import environments_table 
 
+# import to trigger the register function
+from envs import *
+
 
 def train_model(algo, environment, dry, checkpoint, notes):
 
@@ -369,7 +372,8 @@ if __name__ == "__main__":
                humanoid_standup
                inverted_d_pendulum
                inverted_pendulum
-               swimmer""".replace(" ", ""))
+               swimmer
+               customcartpole""".replace(" ", ""))
 
         quit()
     

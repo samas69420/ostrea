@@ -12,6 +12,7 @@
     * support to other network types other than mlp
     * type hints
     * add support to asymmetric action spaces in bounded algos
+    * update readme with stuff about custom environments
 
 #### sac
     

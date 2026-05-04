@@ -18,5 +18,6 @@ environments_table = {
     "humanoid_standup":        {"full": "HumanoidStandup-v5", "is_continuous": True,        "args": None},
     "inverted_d_pendulum":     {"full": "InvertedDoublePendulum-v5", "is_continuous": True, "args": None},
     "inverted_pendulum":       {"full": "InvertedPendulum-v5", "is_continuous": True,       "args": None},
-    "swimmer":                 {"full": "Swimmer-v5", "is_continuous": True,                "args": None}
+    "swimmer":                 {"full": "Swimmer-v5", "is_continuous": True,                "args": None},
+    "customcartpole":          {"full": "CustomCartpole", "is_continuous": False,           "args": None}
 }

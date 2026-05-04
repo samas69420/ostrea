@@ -19,6 +19,7 @@ humanoid_standup*/
 inverted_d_pendulum*/
 inverted_pendulum*/
 swimmer*/
+custom*/
 media/
 videos/
 MUJOCO_LOG.TXT
