@@ -49,7 +49,6 @@ def train_model(algo, environment, dry, checkpoint, notes):
     def get_environments_train(shortname, n_envs):
 
         full_name = environments_table[shortname]["full"]
-        is_continuous = environments_table[shortname]["is_continuous"]
         args = environments_table[shortname]["args"]
 
         if args:
@@ -59,6 +58,8 @@ def train_model(algo, environment, dry, checkpoint, notes):
         else:
             env = gymnasium.make_vec(full_name,num_envs = n_envs)
             eval_env = gymnasium.make_vec(full_name,num_envs = 1)
+
+        is_continuous = not isinstance(env.action_space, gymnasium.spaces.Discrete)
 
         return env, eval_env, is_continuous
 
@@ -211,7 +212,6 @@ def test_model(algo, environment, checkpoint, n_runs, record):
     def get_environment_test(shortname, render_mode):
 
         full_name = environments_table[shortname]["full"]
-        is_continuous = environments_table[shortname]["is_continuous"]
         args = environments_table[shortname]["args"]
 
         if args:
@@ -219,6 +219,8 @@ def test_model(algo, environment, checkpoint, n_runs, record):
 
         else:
             env = gymnasium.make(full_name, render_mode = render_mode)
+
+        is_continuous = not isinstance(env.action_space, gymnasium.spaces.Discrete)
 
         return env, is_continuous
 
