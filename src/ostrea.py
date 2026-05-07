@@ -328,9 +328,7 @@ if __name__ == "__main__":
                     epilog = "author: samas69420")
     
     parser.add_argument('-e', '--environment', metavar = '<cartpole/lander/...>', default = None, help = "what environment should be used")
-    parser.add_argument('-mp', '--modelpol', metavar = 'MODELPATH', default = None, help = "load an existing model (policy)")
-    parser.add_argument('-mv', '--modelval', metavar = 'MODELPATH', default = None, help = "load an existing model (value)")
-    parser.add_argument('-c', '--checkpoint', metavar = 'CHECKPOINT_PATH', default = None, help = "load a checkpoint")
+    parser.add_argument('-c', '--checkpoint', metavar = 'CHECKPOINT_PATH', default = None, help = "load a checkpoint/model")
     parser.add_argument('-a', '--algo',  metavar = '<ppo/dql/...>', default = None, help = "choose an algorithm")
     parser.add_argument('-l', '--list', action='store_true', help = "list all the currently supported algorithms and environments and exit")
     parser.add_argument('-r', '--record', action='store_true', help = "record a vieo of the episodes during testing")
