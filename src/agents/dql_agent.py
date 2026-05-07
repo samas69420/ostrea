@@ -4,9 +4,10 @@ from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.distributions.categorical import Categorical
 from utils.replaymemory import ReplayMemory
 from utils.checkpoint import CheckpointHandler
+from agents.base_agent import BaseAgent
 
 
-class DQLAgent:
+class DQLAgent(BaseAgent):
     
     """
     implementation of a reinforcement learning agent that uses DQL algorithm
@@ -73,21 +74,6 @@ class DQLAgent:
             print("no checkpoint, training new networks")
 
         self.mse = torch.nn.MSELoss()
-
-
-    def save_checkpoint(self, checkpoint_path):
-        # save the full training checkpoint
-        self.checkpoint_handler.save(checkpoint_path, full=True)
-
-
-    def save_model(self, checkpoint_path):
-        # save only the model for inference
-        self.checkpoint_handler.save(checkpoint_path, full=False)
-
-
-    def load_checkpoint(self, checkpoint_path, device):
-        # used for both training checkpoints and inference models
-        self.checkpoint_handler.load(checkpoint_path, device)
 
 
     def decay_epsilon(self):
