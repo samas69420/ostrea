@@ -56,11 +56,11 @@ def train_model(algo, environment, dry, checkpoint, notes):
         args = environments_table[shortname]["args"]
 
         if args:
-            env = gymnasium.make_vec(full_name,**args,num_envs = n_envs)
+            env = gymnasium.make_vec(full_name,**args,num_envs = n_envs, vectorization_mode="async")
             eval_env = gymnasium.make_vec(full_name,**args,num_envs = 1)
 
         else:
-            env = gymnasium.make_vec(full_name,num_envs = n_envs)
+            env = gymnasium.make_vec(full_name,num_envs = n_envs, vectorization_mode="async")
             eval_env = gymnasium.make_vec(full_name,num_envs = 1)
 
         is_continuous = not (isinstance(env.action_space, gymnasium.spaces.Discrete) or \
