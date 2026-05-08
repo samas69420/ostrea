@@ -19,5 +19,7 @@ environments_table = {
     "inverted_d_pendulum":     {"full": "InvertedDoublePendulum-v5","args": None},
     "inverted_pendulum":       {"full": "InvertedPendulum-v5",      "args": None},
     "swimmer":                 {"full": "Swimmer-v5",               "args": None},
-    "customcartpole":          {"full": "CustomCartpole",           "args": None}
+    "customcartpole":          {"full": "CustomCartpole",           "args": None},
+    "customcarracing":         {"full": "CustomCarRacing",          "args": None},
+    "rubikscube":              {"full": "RubiksCube",               "args": None},
 }

@@ -16,6 +16,10 @@ def train_model(algo, environment, dry, checkpoint, notes):
 
     def evaluate_policy(env, agent, scale_action, episodes=10):
 
+        if scale_action:
+            low = torch.tensor(env.action_space.low).to(agent.device)
+            high = torch.tensor(env.action_space.high).to(agent.device)
+
         avg_reward = 0.
 
         with torch.no_grad():
@@ -33,8 +37,8 @@ def train_model(algo, environment, dry, checkpoint, notes):
                     action = agent.choose_action_greedy(state_t.squeeze()).unsqueeze(0)
 
                     if scale_action:
-                        # assuming action bounds are symmetric
-                        scaled_action = action*env.action_space.high.max()
+                        # scale actions linearly to [low,high] assuming they are in the range [-1,1]
+                        scaled_action = 0.5*((high-low)*action + (low+high))
                     else:
                         scaled_action = action
 
@@ -59,7 +63,8 @@ def train_model(algo, environment, dry, checkpoint, notes):
             env = gymnasium.make_vec(full_name,num_envs = n_envs)
             eval_env = gymnasium.make_vec(full_name,num_envs = 1)
 
-        is_continuous = not isinstance(env.action_space, gymnasium.spaces.Discrete)
+        is_continuous = not (isinstance(env.action_space, gymnasium.spaces.Discrete) or \
+                             isinstance(env.action_space, gymnasium.spaces.MultiDiscrete))
 
         return env, eval_env, is_continuous
 
@@ -123,6 +128,9 @@ def train_model(algo, environment, dry, checkpoint, notes):
     some_episode_was_truncated = False
 
     scale_action = bounded_actions and env_is_continuous
+    if scale_action:
+        low = torch.tensor(env.action_space.low).to(params.DEVICE)
+        high = torch.tensor(env.action_space.high).to(params.DEVICE)
 
     # env is reset only here because vectorized envs do it automatically after each episode 
     observation, info = env.reset() 
@@ -138,8 +146,8 @@ def train_model(algo, environment, dry, checkpoint, notes):
             action,logprob = agent.choose_action(S_t)
 
             if scale_action:
-                # assuming action bounds are symmetric
-                scaled_action = action*env.action_space.high.max()
+                # scale actions linearly to [low,high] assuming they are in the range [-1,1]
+                scaled_action = 0.5*((high-low)*action + (low+high))
             else:
                 scaled_action = action
 
@@ -151,22 +159,22 @@ def train_model(algo, environment, dry, checkpoint, notes):
 
             reward = torch.tensor(reward).to(params.DEVICE)
 
-            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-            # ignore the current transition if any of the environments have reset               #
-            # without this check the buffer will contain transitions with                       #
-            # S_t = last state of episode N just before truncation                              #
-            # S_t_plus_1 = first state of the episode N+1 after reset                           #
-            # this condition should be avoided since this transition would not be the result of #
-            # the environment's dynamics and for this reason it shouldn't be learned            #
-                                                                                                #
-            if not some_episode_was_truncated:                                                  #
-                agent.buffer.append((S_t, action, reward, S_t_plus_1, episode_over, logprob))   #
-            if truncated.any():                                                                 #
-                some_episode_was_truncated = True                                               #
-            else:                                                                               #
-                some_episode_was_truncated = False                                              #
-                                                                                                #
-            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+            # ignore the current transition if any of the environments have reset due truncation  #
+            # without this check the buffer will contain transitions with                         #
+            # S_t = last state of episode N just before truncation                                #
+            # S_t_plus_1 = first state of the episode N+1 after reset                             #
+            # this condition should be avoided since this transition would not be the result of   #
+            # the environment's dynamics and for this reason it shouldn't be learned              #
+                                                                                                  #
+            if not some_episode_was_truncated:                                                    #
+                agent.buffer.append((S_t, action, reward, S_t_plus_1, episode_over, logprob))     #
+            if truncated.any():                                                                   #
+                some_episode_was_truncated = True                                                 #
+            else:                                                                                 #
+                some_episode_was_truncated = False                                                #
+                                                                                                  #
+            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
             buffer_return += reward
 
@@ -220,7 +228,8 @@ def test_model(algo, environment, checkpoint, n_runs, record):
         else:
             env = gymnasium.make(full_name, render_mode = render_mode)
 
-        is_continuous = not isinstance(env.action_space, gymnasium.spaces.Discrete)
+        is_continuous = not (isinstance(env.action_space, gymnasium.spaces.Discrete) or \
+                             isinstance(env.action_space, gymnasium.spaces.MultiDiscrete))
 
         return env, is_continuous
 
@@ -288,6 +297,11 @@ def test_model(algo, environment, checkpoint, n_runs, record):
 
     agent = Agent(params)
 
+    scale_action = bounded_actions and env_is_continuous
+    if scale_action:
+        low = torch.tensor(env.action_space.low).to(params.DEVICE)
+        high = torch.tensor(env.action_space.high).to(params.DEVICE)
+
     for e in range(n_runs):
 
         observation, info = env.reset()
@@ -301,9 +315,9 @@ def test_model(algo, environment, checkpoint, n_runs, record):
 
                 action = agent.choose_action_greedy(torch.tensor(observation).to(torch.float))
 
-                if bounded_actions and env_is_continuous:
-                    # assuming action bounds are symmetric
-                    scaled_action = action*env.action_space.high.max()
+                if scale_action:
+                    # scale actions linearly to [low,high] assuming they are in the range [-1,1]
+                    scaled_action = 0.5*((high-low)*action + (low+high))
                 else:
                     scaled_action = action
 
