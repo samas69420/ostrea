@@ -71,6 +71,15 @@ class VPGAgent(BaseAgent):
 
         self.buffer = []
 
+        observation_is_3dtensor = len(self.obs_size) == 3
+
+        if observation_is_3dtensor:
+            raise NotImplementedError("currently only vector inputs are supported")
+
+        elif len(self.obs_size) == 1:
+            # input is a vector
+            mlp_input = self.obs_size[0]
+
         if self.continuous_actions == True:
 
             if not self.separate_cov_params: 
@@ -91,14 +100,14 @@ class VPGAgent(BaseAgent):
             policy_net_output_dim = self.action_space_dim
 
         self.policy_net = nn.Sequential(
-          nn.Linear(self.obs_size, 50),
+          nn.Linear(mlp_input, 50),
           nn.LeakyReLU(),
           nn.Linear(50, 50),
           nn.LeakyReLU(),
           nn.Linear(50, policy_net_output_dim)).to(self.device)
 
         self.value_net = nn.Sequential(
-          nn.Linear(self.obs_size, 50),
+          nn.Linear(mlp_input, 50),
           nn.LeakyReLU(),
           nn.Linear(50, 50),
           nn.LeakyReLU(),

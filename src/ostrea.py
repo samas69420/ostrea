@@ -56,12 +56,12 @@ def train_model(algo, environment, dry, checkpoint, notes):
         args = environments_table[shortname]["args"]
 
         if args:
-            env = gymnasium.make_vec(full_name,**args,num_envs = n_envs, vectorization_mode="async")
-            eval_env = gymnasium.make_vec(full_name,**args,num_envs = 1)
+            env = gymnasium.make_vec(full_name,**args,num_envs = n_envs, render_mode = None, vectorization_mode="async")
+            eval_env = gymnasium.make_vec(full_name,**args,num_envs = 1, render_mode = None)
 
         else:
-            env = gymnasium.make_vec(full_name,num_envs = n_envs, vectorization_mode="async")
-            eval_env = gymnasium.make_vec(full_name,num_envs = 1)
+            env = gymnasium.make_vec(full_name,num_envs = n_envs, render_mode = None, vectorization_mode="async")
+            eval_env = gymnasium.make_vec(full_name,num_envs = 1, render_mode = None)
 
         is_continuous = not (isinstance(env.action_space, gymnasium.spaces.Discrete) or \
                              isinstance(env.action_space, gymnasium.spaces.MultiDiscrete))
@@ -95,7 +95,7 @@ def train_model(algo, environment, dry, checkpoint, notes):
 
     params.checkpoint = checkpoint
     params.env_is_continuous = env_is_continuous
-    params.obs_size = env.observation_space.shape[-1]
+    params.obs_size = eval_env.observation_space.shape[1:]
     params.action_space_dim = env.action_space.shape[-1] if env_is_continuous \
                                                        else env.action_space[0].n
     agent = Agent(params)
@@ -291,7 +291,7 @@ def test_model(algo, environment, checkpoint, n_runs, record):
 
     params.checkpoint = checkpoint
     params.env_is_continuous = env_is_continuous
-    params.obs_size = env.observation_space.shape[-1]
+    params.obs_size = env.observation_space.shape
     params.action_space_dim = env.action_space.shape[-1] if env_is_continuous \
                                                        else env.action_space.n
 

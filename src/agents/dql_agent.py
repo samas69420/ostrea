@@ -49,16 +49,25 @@ class DQLAgent(BaseAgent):
 
         self.buffer = []
         self.memory = ReplayMemory(maxlen=self.memory_maxlen)
+
+        observation_is_3dtensor = len(self.obs_size) == 3
+
+        if observation_is_3dtensor:
+            raise NotImplementedError("currently only vector inputs are supported")
+
+        elif len(self.obs_size) == 1:
+            # input is a vector
+            value_net_input_dim = self.obs_size[0]
         
         self.value_net = nn.Sequential(
-          nn.Linear(self.obs_size, 64),
+          nn.Linear(value_net_input_dim, 64),
           nn.LeakyReLU(),
           nn.Linear(64, 64),
           nn.LeakyReLU(),
           nn.Linear(64, self.action_space_dim)).to(self.device)
 
         self.target_value_net = nn.Sequential(
-          nn.Linear(self.obs_size, 64),
+          nn.Linear(value_net_input_dim, 64),
           nn.LeakyReLU(),
           nn.Linear(64, 64),
           nn.LeakyReLU(),

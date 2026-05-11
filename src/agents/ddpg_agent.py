@@ -48,15 +48,23 @@ class DDPGAgent(BaseAgent):
         self.action_space_dim = parameters.action_space_dim
         self.checkpoint = parameters.checkpoint
 
-        value_net_input_dim = self.obs_size + self.action_space_dim
-
         self.buffer = []
         self.tot_steps = 0
 
         self.memory = ReplayMemory(maxlen=self.memory_maxlen)
 
+        observation_is_3dtensor = len(self.obs_size) == 3
+
+        if observation_is_3dtensor:
+            raise NotImplementedError("currently only vector inputs are supported")
+
+        elif len(self.obs_size) == 1:
+            # input is a vector
+            policy_net_input_dim = self.obs_size[0]
+            value_net_input_dim = self.obs_size[0] + self.action_space_dim
+
         self.policy_net = nn.Sequential(
-          nn.Linear(self.obs_size, 100),
+          nn.Linear(policy_net_input_dim, 100),
           nn.Tanh(),
           nn.Linear(100, 100),
           nn.Tanh(),
@@ -64,7 +72,7 @@ class DDPGAgent(BaseAgent):
           nn.Tanh()).to(self.device)
 
         self.target_policy_net = nn.Sequential(
-          nn.Linear(self.obs_size, 100),
+          nn.Linear(policy_net_input_dim, 100),
           nn.Tanh(),
           nn.Linear(100, 100),
           nn.Tanh(),

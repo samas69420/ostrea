@@ -5,6 +5,17 @@ from torch.distributions.categorical import Categorical
 from utils.checkpoint import CheckpointHandler
 from agents.base_agent import BaseAgent
 
+class SqueezeAll(torch.nn.Module):
+    """
+    module needed after the conv body to convert the output shape of the last
+    convolution from (NCHW)/(CHW) -> (N,C)/(C,) ready for the mlp
+    
+    torch.nn.Flatten does not work cause when H,W = 1,1
+    dim = 1 (NCHW)/(CHW) -> (N,C)/(C,1)
+    dim = 0 (NCHW)/(CHW) -> (N*C)/(C,)
+    """
+    def forward(self, x):
+        return x.squeeze() 
 
 class PPOAgent(BaseAgent):
 
@@ -94,19 +105,59 @@ class PPOAgent(BaseAgent):
         else:
             policy_net_output_dim = self.action_space_dim
 
+        observation_is_3dtensor = len(self.obs_size) == 3
+
+        if observation_is_3dtensor:
+            # fix the in size for mlp and add a conv body later
+            mlp_input = 256
+
+        elif len(self.obs_size) == 1:
+            # input is a vector
+            mlp_input = self.obs_size[0]
+
         self.policy_net = nn.Sequential(
-          nn.Linear(self.obs_size, 100),
+          nn.Linear(mlp_input, 256),
           nn.LeakyReLU(),
-          nn.Linear(100, 100),
+          nn.Linear(256, 256),
           nn.LeakyReLU(),
-          nn.Linear(100, policy_net_output_dim)).to(self.device)
+          nn.Linear(256, policy_net_output_dim)).to(self.device)
 
         self.value_net = nn.Sequential(
-          nn.Linear(self.obs_size, 100),
+          nn.Linear(mlp_input, 256),
           nn.LeakyReLU(),
-          nn.Linear(100, 100),
+          nn.Linear(256, 256),
           nn.LeakyReLU(),
-          nn.Linear(100, 1)).to(self.device)
+          nn.Linear(256, 1)).to(self.device)
+
+        if observation_is_3dtensor:
+
+            # add a convolution body before the mlp
+
+            self.policy_net = torch.nn.Sequential(
+                                    torch.nn.Conv2d(self.obs_size[0], 64, kernel_size = 3, stride = 4, padding = "valid"),
+                                    torch.nn.ReLU(),
+                                    torch.nn.Conv2d(64, 128, kernel_size = 3, stride = 2, padding = "valid"),
+                                    torch.nn.ReLU(),
+                                    torch.nn.Conv2d(128, 256, kernel_size = 3, padding = "valid"),
+                                    torch.nn.ReLU(),
+                                    torch.nn.Conv2d(256, mlp_input, kernel_size = 3, padding = "valid"),
+                                    torch.nn.ReLU(),
+                                    torch.nn.AdaptiveAvgPool2d((1,1)),
+                                    SqueezeAll()).to(self.device)\
+                                    .extend(self.policy_net)
+
+            self.value_net = torch.nn.Sequential(
+                                    torch.nn.Conv2d(self.obs_size[0], 64, kernel_size = 3, stride = 4,  padding = "valid"),
+                                    torch.nn.ReLU(),
+                                    torch.nn.Conv2d(64, 128, kernel_size = 3, stride = 2, padding = "valid"),
+                                    torch.nn.ReLU(),
+                                    torch.nn.Conv2d(128, 256, kernel_size = 3, padding = "valid"),
+                                    torch.nn.ReLU(),
+                                    torch.nn.Conv2d(256, mlp_input, kernel_size = 3, padding = "valid"),
+                                    torch.nn.ReLU(),
+                                    torch.nn.AdaptiveAvgPool2d((1,1)),
+                                    SqueezeAll()).to(self.device)\
+                                    .extend(self.value_net)
 
         # group together all the trainable parameters used by the policy
 
@@ -238,21 +289,34 @@ class PPOAgent(BaseAgent):
         dones = torch.stack([t[4] for t in self.buffer])
         log_probs_old = torch.stack([t[5] for t in self.buffer])
 
+        # merge timesteps and envs dim
+        states = states.flatten(0,1)
+        actions = actions.flatten(0,1)
+        rewards = rewards.flatten(0,1)
+        next_states = next_states.flatten(0,1)
+        dones = dones.flatten(0,1)
+        log_probs_old = log_probs_old.flatten(0,1)
+
         with torch.no_grad():
 
             # generalized advantage estimators
 
             if self.advantage_type == "GAE":
 
-                advantages = torch.zeros(T,self.n_env, dtype=torch.float32).to(self.device)
-                returns = torch.zeros(T,self.n_env, dtype=torch.float32).to(self.device)
+                advantages = torch.zeros(T*self.n_env, dtype=torch.float32).to(self.device)
+                returns = torch.zeros(T*self.n_env, dtype=torch.float32).to(self.device)
 
-                values = self.value_net(states).squeeze(-1)           # (T,n_env)
-                next_values = self.value_net(next_states).squeeze(-1) # (T,n_env)
+                values = torch.zeros_like(returns).to(self.device) # (T*n_env)
+                next_values = torch.zeros_like(returns).to(self.device) # (T*n_env)
+
+                # compute values and next values in batches or the memory consumption explodes with tensor observations
+                for index in range(0,(T*self.n_env)-self.value_batch_size, self.value_batch_size):
+                    values[index:index+self.value_batch_size] = self.value_net(states[index:index+self.value_batch_size]).squeeze(-1)           
+                    next_values[index:index+self.value_batch_size] = self.value_net(next_states[index:index+self.value_batch_size]).squeeze(-1) 
                 
                 gae = 0
 
-                for t in reversed(range(T)):
+                for t in reversed(range(len(returns))):
                     
                     delta = rewards[t] + self.gamma * next_values[t] * (1.0 - dones[t].to(int)) - values[t]
                     gae = delta + self.gamma * self.gae_lambda * (1.0 - dones[t].to(int)) * gae
@@ -283,8 +347,8 @@ class PPOAgent(BaseAgent):
             if self.advantage_type == "MC":
 
                 values = self.value_net(states).squeeze(-1)
-                returns = torch.zeros(T, self.n_env, dtype=torch.float32).to(self.device)
-                for t in reversed(range(T)):
+                returns = torch.zeros(T*self.n_env, dtype=torch.float32).to(self.device)
+                for t in reversed(range(len(returns))):
                     returns[t] = rewards[t] + self.gamma * returns[t] * (1.0 - dones[t].to(int))
 
                 advantages = returns - values
@@ -298,10 +362,10 @@ class PPOAgent(BaseAgent):
         # multiple update steps with minibatches
         for _ in range(self.value_epochs):
 
-            # arrange the numbers from 0 to T randomly 
-            indices = torch.randperm(T) 
+            # arrange as much numbers as the elements of returns randomly 
+            indices = torch.randperm(len(returns)) 
 
-            for start in range(0, T, self.value_batch_size):
+            for start in range(0, len(returns), self.value_batch_size):
                 end = start + self.value_batch_size
                 mb_indices = indices[start:end]
            
@@ -324,10 +388,10 @@ class PPOAgent(BaseAgent):
 
         for _ in range(self.policy_epochs):
 
-            # arrange the numbers from 0 to T randomly 
-            indices = torch.randperm(T) 
+            # arrange as much numbers as the elements of returns randomly 
+            indices = torch.randperm(len(returns)) 
 
-            for start in range(0, T, self.policy_batch_size):
+            for start in range(0, len(returns), self.policy_batch_size):
 
                 end = start + self.policy_batch_size
                 mb_indices = indices[start:end]
@@ -345,17 +409,18 @@ class PPOAgent(BaseAgent):
 
                     policy_net_out = self.policy_net(mb_states)
 
-                    means = policy_net_out[:,:,:self.action_space_dim]
+                    means = policy_net_out[:,:self.action_space_dim]
 
                     if not self.separate_cov_params: 
 
                         if not self.diagonal_cov:
-                            cov_values = policy_net_out[:,:,self.action_space_dim:]\
-                                        .reshape(-1,self.n_env,self.action_space_dim,
+                            #TODO test this part
+                            cov_values = policy_net_out[:,self.action_space_dim:]\
+                                        .reshape(-1,self.action_space_dim,
                                                     self.action_space_dim)
                             cov = cov_values.transpose(-2,-1) @ cov_values + self.numerical_epsilon * torch.eye(self.action_space_dim).to(self.device)
                         else:
-                            cov = torch.diag_embed(torch.exp(policy_net_out[:,:,self.action_space_dim:]))
+                            cov = torch.diag_embed(torch.exp(policy_net_out[:,self.action_space_dim:]))
 
                     else:
 

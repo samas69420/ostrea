@@ -58,19 +58,29 @@ class SACAgent(BaseAgent):
         self.continuous_actions = parameters.env_is_continuous
         self.checkpoint = parameters.checkpoint
 
+        observation_is_3dtensor = len(self.obs_size) == 3
+
         if self.alpha == "auto":
             self.log_alpha = torch.nn.Parameter(torch.zeros(1).to(self.device))
         else:
             self.log_alpha = torch.log(torch.tensor(self.alpha).to(self.device))
 
-        if self.continuous_actions:
-            policy_net_output_dim = 2*self.action_space_dim 
-            value_net_input_dim = self.obs_size + self.action_space_dim
-            value_net_output_dim = 1
-        else:
-            policy_net_output_dim = self.action_space_dim
-            value_net_input_dim = self.obs_size
-            value_net_output_dim = self.action_space_dim
+        if observation_is_3dtensor:
+            raise NotImplementedError("currently only vector inputs are supported")
+
+        elif len(self.obs_size) == 1:
+            # input is a vector
+
+            policy_net_input_dim = self.obs_size[0]
+
+            if self.continuous_actions:
+                policy_net_output_dim = 2*self.action_space_dim
+                value_net_input_dim = self.obs_size[0] + self.action_space_dim
+                value_net_output_dim = 1
+            else:
+                policy_net_output_dim = self.action_space_dim
+                value_net_input_dim = self.obs_size[0]
+                value_net_output_dim = self.action_space_dim
 
         if parameters.TARGET_H == "auto":
             self.target_h = torch.tensor(-self.action_space_dim).to(self.device) if self.continuous_actions \
@@ -84,7 +94,7 @@ class SACAgent(BaseAgent):
         self.memory = ReplayMemory(maxlen=self.memory_maxlen)
 
         self.policy_net = nn.Sequential(
-          nn.Linear(self.obs_size, 100),
+          nn.Linear(policy_net_input_dim, 100),
           nn.LeakyReLU(),
           nn.Linear(100, 100),
           nn.LeakyReLU(),

@@ -15,7 +15,7 @@ if __name__ == "__main__":
         print(f"using device {params.DEVICE}")
 
         params.checkpoint = None
-        params.obs_size = 2
+        params.obs_size = (2,)
         params.action_space_dim = 3
 
         params.env_is_continuous = False 
@@ -64,7 +64,7 @@ if __name__ == "__main__":
 
         params.checkpoint = None 
         params.env_is_continuous = False 
-        params.obs_size = 2
+        params.obs_size = (2,)
         params.action_space_dim = 3
         params.MEMORY_BATCH_SIZE = 4
 
@@ -103,7 +103,7 @@ if __name__ == "__main__":
         print(f"using device {params.DEVICE}")
 
         params.checkpoint = None
-        params.obs_size = 2
+        params.obs_size = (2,)
         params.action_space_dim = 3
         params.WARMUP = 0
         params.MEMORY_BATCH_SIZE  = 5
@@ -152,7 +152,7 @@ if __name__ == "__main__":
         print(f"using device {params.DEVICE}")
 
         params.checkpoint = None 
-        params.obs_size = 2
+        params.obs_size = (2,)
         params.action_space_dim = 3
 
         params.env_is_continuous = False 
@@ -201,7 +201,7 @@ if __name__ == "__main__":
 
         params.checkpoint = None
         params.env_is_continuous = True
-        params.obs_size = 2
+        params.obs_size = (2,)
         params.action_space_dim = 3
         params.WARMUP = 0
         params.MEMORY_BATCH_SIZE  = 5
