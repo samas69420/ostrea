@@ -18,7 +18,7 @@ class CustomCarRacing(gym.Env):
         super().__init__()
         self.env = gym.make("CarRacing-v3",**kwargs)
         self.action_space = self.env.action_space
-        self.observation_space = gym.spaces.Box(0,1,(past_frames,96,96),np.float32)
+        self.observation_space = gym.spaces.Box(0,255,(past_frames,96,96),np.float32)
         self.obs = np.zeros((past_frames,96,96))
 
 
