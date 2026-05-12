@@ -76,6 +76,7 @@ class PPOAgent(BaseAgent):
         self.policy_lr = parameters.POLICY_LR
         self.value_lr = parameters.VALUE_LR
         self.policy_method = parameters.POLICY_METHOD
+        self.squash_action = parameters.SQUASH_ACTION
 
         # extract the other values added before calling the constructor
 
@@ -136,11 +137,9 @@ class PPOAgent(BaseAgent):
             self.policy_net = torch.nn.Sequential(
                                     torch.nn.Conv2d(self.obs_size[0], 64, kernel_size = 3, stride = 4, padding = "valid"),
                                     torch.nn.ReLU(),
-                                    torch.nn.Conv2d(64, 128, kernel_size = 3, stride = 2, padding = "valid"),
+                                    torch.nn.Conv2d(64, 64, kernel_size = 3, stride = 2, padding = "valid"),
                                     torch.nn.ReLU(),
-                                    torch.nn.Conv2d(128, 256, kernel_size = 3, padding = "valid"),
-                                    torch.nn.ReLU(),
-                                    torch.nn.Conv2d(256, mlp_input, kernel_size = 3, padding = "valid"),
+                                    torch.nn.Conv2d(64, mlp_input, kernel_size = 3, padding = "valid"),
                                     torch.nn.ReLU(),
                                     torch.nn.AdaptiveAvgPool2d((1,1)),
                                     SqueezeAll()).to(self.device)\
@@ -149,11 +148,9 @@ class PPOAgent(BaseAgent):
             self.value_net = torch.nn.Sequential(
                                     torch.nn.Conv2d(self.obs_size[0], 64, kernel_size = 3, stride = 4,  padding = "valid"),
                                     torch.nn.ReLU(),
-                                    torch.nn.Conv2d(64, 128, kernel_size = 3, stride = 2, padding = "valid"),
+                                    torch.nn.Conv2d(64, 64, kernel_size = 3, stride = 2, padding = "valid"),
                                     torch.nn.ReLU(),
-                                    torch.nn.Conv2d(128, 256, kernel_size = 3, padding = "valid"),
-                                    torch.nn.ReLU(),
-                                    torch.nn.Conv2d(256, mlp_input, kernel_size = 3, padding = "valid"),
+                                    torch.nn.Conv2d(64, mlp_input, kernel_size = 3, padding = "valid"),
                                     torch.nn.ReLU(),
                                     torch.nn.AdaptiveAvgPool2d((1,1)),
                                     SqueezeAll()).to(self.device)\
@@ -184,7 +181,6 @@ class PPOAgent(BaseAgent):
             print("no checkpoint, training new networks")
 
         self.mse = torch.nn.MSELoss()
-
 
     def choose_action(self, obs):
 
@@ -244,6 +240,14 @@ class PPOAgent(BaseAgent):
             # return also the probability of the action sampled (for later)
             log_prob_action = probs_distribution.log_prob(action)
 
+            if self.continuous_actions and self.squash_action:
+
+                log_prob_action -= torch.log(1-torch.tanh(action)**2+self.numerical_epsilon).sum(-1)
+                action = torch.tanh(action)
+
+                # add a clamp or in update when the action gets unsquashed the result could explode
+                action = action.clamp(-1+self.numerical_epsilon,1-self.numerical_epsilon)
+
         return action, log_prob_action
 
 
@@ -257,6 +261,9 @@ class PPOAgent(BaseAgent):
             
                 policy_net_out = self.policy_net(obs)
                 action = policy_net_out[:self.action_space_dim] 
+
+                if self.squash_action:
+                    action = torch.tanh(action)
 
             else:
 
@@ -435,14 +442,25 @@ class PPOAgent(BaseAgent):
                             cov = torch.diag(torch.exp(self.log_var)) 
 
                     distributions = MultivariateNormal(means,cov)
-                    log_probs = distributions.log_prob(mb_actions)
 
-                else:
+                    if self.squash_action:
+
+                        # here unsquashed actions are needed
+                        unsquashed_actions = torch.atanh(mb_actions)
+                        log_probs = distributions.log_prob(unsquashed_actions)
+                        log_probs -= torch.log(1-mb_actions**2+self.numerical_epsilon).sum(-1)
+
+                    elif not self.squash_action:
+
+                        log_probs = distributions.log_prob(mb_actions)
+
+                elif not self.continuous_actions:
 
                     logits = self.policy_net(mb_states)
                     distributions = Categorical(logits=logits)
+                    log_probs = distributions.log_prob(mb_actions)
 
-                log_probs = distributions.log_prob(mb_actions)
+                # this is always the entropy of the gaussian distributions with or without squashing
                 entropy = distributions.entropy()
 
                 ratio = torch.exp(log_probs - mb_log_probs_old)

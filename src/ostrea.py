@@ -71,7 +71,7 @@ def train_model(algo, environment, dry, checkpoint, notes):
     if algo == "ppo":
         from agents.ppo_agent import PPOAgent as Agent
         from parameters.ppo_params import params
-        bounded_actions = False
+        bounded_actions = True if params.SQUASH_ACTION else False
     elif algo == "dql":
         from agents.dql_agent import DQLAgent as Agent
         from parameters.dql_params import params
@@ -236,7 +236,7 @@ def test_model(algo, environment, checkpoint, n_runs, record):
     if algo == "ppo":
         from agents.ppo_agent import PPOAgent as Agent
         from parameters.ppo_params import params
-        bounded_actions = False
+        bounded_actions = True if params.SQUASH_ACTION else False
     elif algo == "dql":
         from agents.dql_agent import DQLAgent as Agent
         from parameters.dql_params import params
