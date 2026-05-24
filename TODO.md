@@ -12,6 +12,8 @@
     * support to other network types other than mlp
     * type hints
     * update readme with stuff about custom environments
+    * enable bootstrapping for truncated episodes in on-policy algos
+    * better testing, ideally including all possible variants and input/output types
 
 #### sac
     
@@ -35,3 +37,7 @@
     
     * rewrite batching to mix not only timesteps but also environments
     * entropy augmentation 
+
+#### vpg
+    
+    * squash action

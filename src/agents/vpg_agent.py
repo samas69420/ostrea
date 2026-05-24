@@ -6,6 +6,216 @@ from utils.checkpoint import CheckpointHandler
 from agents.base_agent import BaseAgent
 
 
+class Model:
+    """
+    class to manage neural networks separately, the idea is that even if
+    the learning algorithm uses some approximators it should be
+    approximator-agnostic and it shouldn't take care also of the internal
+    details of how the approximator is structured
+    """
+
+    def __init__(self,
+                 obs_size,
+                 action_space_dim,
+                 continuous_actions,
+                 lr,
+                 diagonal_cov,
+                 min_cov,
+                 separate_cov_params,
+                 device,
+                 numerical_epsilon):
+
+        self.observation_is_3d_tensor = len(obs_size) == 3
+        self.device = device
+        self.separate_cov_params = separate_cov_params
+        self.diagonal_cov = diagonal_cov
+        self.continuous_actions = continuous_actions
+        self.action_space_dim = action_space_dim
+        self.min_cov = min_cov
+        self.numerical_epsilon = numerical_epsilon
+
+        if self.observation_is_3d_tensor:
+            raise NotImplementedError("currently only vector inputs are supported")
+
+        elif len(obs_size) == 1:
+            # input is a vector
+            mlp_input = obs_size[0]
+
+        if self.continuous_actions == True:
+
+            if not self.separate_cov_params:
+
+                # number of means + number of elements for covariance matrix
+                if not self.diagonal_cov:
+                    policy_net_output_dim = self.action_space_dim + self.action_space_dim**2
+                else:
+                    policy_net_output_dim = 2*self.action_space_dim
+            else:
+                policy_net_output_dim = self.action_space_dim
+                if not self.diagonal_cov:
+                    self.cov_values = nn.Parameter(torch.rand(self.action_space_dim, self.action_space_dim).to(self.device))
+                else:
+                    self.log_var = nn.Parameter(torch.ones(self.action_space_dim).to(self.device))
+
+        else:
+            policy_net_output_dim = self.action_space_dim
+
+        self.policy_net = nn.Sequential(
+          nn.Linear(mlp_input, 100),
+          nn.LeakyReLU(),
+          nn.Linear(100, 100),
+          nn.LeakyReLU(),
+          nn.Linear(100, policy_net_output_dim)).to(self.device)
+
+        self.value_net = nn.Sequential(
+          nn.Linear(mlp_input, 100),
+          nn.LeakyReLU(),
+          nn.Linear(100, 100),
+          nn.LeakyReLU(),
+          nn.Linear(100, 1)).to(self.device)
+
+        # all trainable params
+
+        all_params = list(self.policy_net.parameters())\
+                   + list(self.value_net.parameters())
+
+        if self.continuous_actions == True:
+            if self.separate_cov_params:
+                if not self.diagonal_cov:
+                    all_params.append(self.cov_values)
+                else:
+                    all_params.append(self.log_var)
+
+        self.optim = torch.optim.Adam(all_params,
+                           lr = lr)
+
+
+    def compute_distributions(self, vec_obs):
+        """
+        use the approximators to compute the probability distributions
+        for the input
+        takes only batched vector obs of shape: (B,n_env,n)
+        where B is the arbitrary batch size chosen to process the buffer
+        """
+        n_samp,n_env,vec_size = vec_obs.shape
+
+        if self.continuous_actions:
+
+            # create probability distribution (n-d gaussian)
+
+            # run the policy to get means and covariances
+            policy_net_out = self.policy_net(vec_obs)
+
+            means = policy_net_out[:,:,:self.action_space_dim]
+
+            if not self.separate_cov_params:
+
+                if not self.diagonal_cov:
+
+                    # this can lead to errors due to numerical instability
+                    cov_values = policy_net_out[:,:,self.action_space_dim:]\
+                                 .reshape(-1,
+                                          self.action_space_dim,
+                                          self.action_space_dim)
+
+                    cov = cov_values.mT @ cov_values + self.numerical_epsilon * torch.eye(self.action_space_dim).to(self.device)
+                    cov = cov.reshape(-1,n_env,self.action_space_dim,self.action_space_dim)
+
+                else:
+
+                    cov_values = policy_net_out[:,:,self.action_space_dim:]
+                    cov = torch.stack([torch.diag(torch.exp(e).clamp(min=self.min_cov)) for e in cov_values.reshape(-1,self.action_space_dim)])
+                    cov = cov.reshape(-1,n_env,self.action_space_dim,self.action_space_dim)
+
+            else:
+
+                if not self.diagonal_cov:
+
+                    # this can lead to errors due to numerical instability
+                    cov = self.cov_values.T @ self.cov_values + self.numerical_epsilon * torch.eye(self.action_space_dim).to(self.device)
+
+                else:
+
+                    cov = torch.diag(torch.exp(self.log_var).clamp(min=self.min_cov))
+
+            probs_distribution = MultivariateNormal(means,cov)
+
+        else:
+
+            # run the policy to get logits
+            logits  = self.policy_net(vec_obs)
+
+            # create the discrete distribution
+            probs_distribution = Categorical(logits=logits)
+
+        return probs_distribution
+
+
+    def compute_action(self, vec_obs):
+        """
+        compute action deterministically for inference/eval
+        takes only vector observation of shape (n)
+        """
+
+        if self.continuous_actions:
+
+            # get only the means as actions
+
+            policy_net_out = self.policy_net(vec_obs)
+            action = policy_net_out[:self.action_space_dim]
+
+        else:
+
+            # compute probs and return the action with the highest one
+
+            logits  = self.policy_net(vec_obs)
+            probs_distribution = Categorical(logits=logits)
+            action = probs_distribution.probs.argmax()
+
+        return action
+
+
+    def value(self, vec_obs):
+        """
+        compute the value of a observation using the value approximator
+        takes only batched vector obs of shape (B, n_env, n)
+        where B is the arbitrary batch size chosen to process the buffer
+        """
+        return self.value_net(vec_obs)
+
+
+    def update_parameters(self, loss):
+        """
+        update the internal parameters of the approximators (networks weights)
+        """
+
+        self.optim.zero_grad()
+
+        loss.backward()
+
+        # gradient clipping for more stability
+        for name, obj in self.__dict__.items():
+            if isinstance(obj, torch.nn.Module):
+                torch.nn.utils.clip_grad_norm_(obj.parameters(), 0.5)
+
+        self.optim.step()
+
+
+    def __str__(self):
+
+        result = ""
+
+        for name, obj in self.__dict__.items():
+            if isinstance(obj, torch.nn.Module):
+                result += "network: " + name + '\n'
+                result += str(obj) + '\n'
+            if isinstance(obj, torch.optim.Optimizer):
+                result += "optimizer: " + name + '\n'
+                result += str(obj) + '\n'
+
+        return result
+
+
 class VPGAgent(BaseAgent):
 
     """
@@ -39,6 +249,7 @@ class VPGAgent(BaseAgent):
     https://proceedings.neurips.cc/paper_files/paper/1999/file/464d828b85b0bed98e80ade0a5c43b0f-Paper.pdf
     """
 
+
     def __init__(self, parameters):
 
         if parameters.SEED:
@@ -53,12 +264,10 @@ class VPGAgent(BaseAgent):
         self.diagonal_cov = parameters.DIAGONAL_COV_MATRIX
         self.separate_cov_params = parameters.SEPARATE_COV_PARAMS 
         self.min_cov = parameters.MIN_COV
-        self.value_batch_size = parameters.VALUE_BATCH_SIZE
-        self.value_epochs = parameters.VALUE_EPOCHS 
+        self.batch_size = parameters.BATCH_SIZE
         self.device = parameters.DEVICE
         self.n_env = parameters.N_ENV
-        self.policy_lr = parameters.POLICY_LR
-        self.value_lr = parameters.VALUE_LR
+        self.lr = parameters.LR
         self.beta = parameters.BETA
         self.policy_method = parameters.POLICY_METHOD
 
@@ -71,65 +280,15 @@ class VPGAgent(BaseAgent):
 
         self.buffer = []
 
-        observation_is_3dtensor = len(self.obs_size) == 3
-
-        if observation_is_3dtensor:
-            raise NotImplementedError("currently only vector inputs are supported")
-
-        elif len(self.obs_size) == 1:
-            # input is a vector
-            mlp_input = self.obs_size[0]
-
-        if self.continuous_actions == True:
-
-            if not self.separate_cov_params: 
-
-                # number of means + number of elements for covariance matrix
-                if not self.diagonal_cov:
-                    policy_net_output_dim = self.action_space_dim + self.action_space_dim**2 
-                else:
-                    policy_net_output_dim = 2*self.action_space_dim
-            else:
-                policy_net_output_dim = self.action_space_dim
-                if not self.diagonal_cov:
-                    self.cov_values = nn.Parameter(torch.rand(self.action_space_dim, self.action_space_dim).to(self.device))
-                else:
-                    self.log_var = nn.Parameter(torch.ones(self.action_space_dim).to(self.device))
-
-        else:
-            policy_net_output_dim = self.action_space_dim
-
-        self.policy_net = nn.Sequential(
-          nn.Linear(mlp_input, 50),
-          nn.LeakyReLU(),
-          nn.Linear(50, 50),
-          nn.LeakyReLU(),
-          nn.Linear(50, policy_net_output_dim)).to(self.device)
-
-        self.value_net = nn.Sequential(
-          nn.Linear(mlp_input, 50),
-          nn.LeakyReLU(),
-          nn.Linear(50, 50),
-          nn.LeakyReLU(),
-          nn.Linear(50, 1)).to(self.device)
-
-        # all trainable params
-
-        all_policy_params = list(self.policy_net.parameters())
-
-        if self.continuous_actions == True:
-            if self.separate_cov_params:
-                if not self.diagonal_cov:
-                    all_policy_params.append(self.cov_values)
-                else:
-                    all_policy_params.append(self.log_var)
-
-        self.optim_policy = torch.optim.Adam(all_policy_params,
-                            maximize = True,
-                            lr = self.policy_lr)
-
-        self.optim_value = torch.optim.Adam(self.value_net.parameters(),
-                           lr = self.value_lr)
+        self.model = Model(self.obs_size,
+                           self.action_space_dim,
+                           self.continuous_actions,
+                           self.lr,
+                           self.diagonal_cov,
+                           self.min_cov,
+                           self.separate_cov_params,
+                           self.device,
+                           self.numerical_epsilon)
 
         self.checkpoint_handler = CheckpointHandler(self)
 
@@ -138,66 +297,24 @@ class VPGAgent(BaseAgent):
         else:
             print("no checkpoint, training new networks")
 
-        self.mse = torch.nn.MSELoss()
+        self.loss_fn = torch.nn.MSELoss()
 
 
     def choose_action(self, obs):
+
+        obs = obs.unsqueeze(dim=0)
 
         with torch.no_grad():
 
             # generate a distribution with the net, then sample from it 
 
-            if self.continuous_actions:
-
-                # create probability distribution (n-d gaussian) 
-
-                # run the policy to get means and covariances
-                policy_net_out = self.policy_net(obs)
-
-                means = policy_net_out[:,:self.action_space_dim]
-
-                if not self.separate_cov_params:
-                
-                    if not self.diagonal_cov:
-
-                        # this can lead to errors due to numerical instability
-                        cov_values = policy_net_out[:,self.action_space_dim:]\
-                                     .reshape(-1,
-                                              self.action_space_dim,
-                                              self.action_space_dim)
-                        cov = cov_values.mT @ cov_values + self.numerical_epsilon * torch.eye(self.action_space_dim).to(self.device)
-
-                    else:
-
-                        cov_values = policy_net_out[:,self.action_space_dim:]
-                        cov = torch.stack([torch.diag(torch.exp(e).clamp(min=self.min_cov)) for e in cov_values])
-
-                else:
-
-                    if not self.diagonal_cov:
-
-                        # this can lead to errors due to numerical instability
-                        cov = self.cov_values.T @ self.cov_values + self.numerical_epsilon * torch.eye(self.action_space_dim).to(self.device)
-
-                    else:
-
-                        cov = torch.diag(torch.exp(self.log_var).clamp(min=self.min_cov))
-
-                probs_distribution = MultivariateNormal(means,cov)
-
-            else:
-
-                # run the policy to get logits
-                logits  = self.policy_net(obs)
-
-                # create the discrete distribution
-                probs_distribution = Categorical(logits=logits)
+            probs_distribution = self.model.compute_distributions(obs)
 
             # sample from prob distribution
-            action = probs_distribution.sample()
+            action = probs_distribution.sample().squeeze()
 
             # return also the probability of the action sampled (for later)
-            log_prob_action = probs_distribution.log_prob(action)
+            log_prob_action = probs_distribution.log_prob(action).squeeze()
 
         return action, log_prob_action
 
@@ -206,28 +323,21 @@ class VPGAgent(BaseAgent):
 
         with torch.no_grad():
 
-            if self.continuous_actions:
-    
-                # get only the means as actions 
-            
-                policy_net_out = self.policy_net(obs)
-                action = policy_net_out[:self.action_space_dim] 
-
-            else:
-
-                # compute probs and return the action with the highest one 
-
-                logits  = self.policy_net(obs)
-                probs_distribution = Categorical(logits=logits)
-                action = probs_distribution.probs.argmax()
+            action = self.model.compute_action(obs)
 
         return action
 
 
     def update(self):
 
+        """
+        update function, here the buffer filled with (s,a,r,s',d,logp(a))
+        transitions is used to update value and policy networks using PPO
+        (note that the buffer may contain transitions from one or more episodes)
+        """
+
         T = len(self.buffer)
-       
+
         # extract all the values from the buffer into tensors so they can be
         # processed in parallel
 
@@ -235,8 +345,9 @@ class VPGAgent(BaseAgent):
         actions = torch.stack([t[1] for t in self.buffer])
         rewards = torch.stack([t[2] for t in self.buffer])
         next_states = torch.stack([t[3] for t in self.buffer])
-        dones = torch.stack([t[4] for t in self.buffer])
-        log_probs_old = torch.stack([t[5] for t in self.buffer])
+        terminated = torch.stack([t[4] for t in self.buffer])
+        truncated = torch.stack([t[5] for t in self.buffer])
+        log_probs_old = torch.stack([t[6] for t in self.buffer])
 
         with torch.no_grad():
 
@@ -244,138 +355,109 @@ class VPGAgent(BaseAgent):
 
             if self.advantage_type == "GAE":
 
+                # note: according to the current version of the code the time
+                # dimension and the env dimension should stay separated for GAEs
+                # to be computed correctly
+
                 advantages = torch.zeros(T,self.n_env, dtype=torch.float32).to(self.device)
                 returns = torch.zeros(T,self.n_env, dtype=torch.float32).to(self.device)
 
-                values = self.value_net(states).squeeze(-1)           # (T,n_env)
-                next_values = self.value_net(next_states).squeeze(-1) # (T,n_env)
-                
+                values = torch.zeros_like(returns).to(self.device) # (T,n_env)
+                next_values = torch.zeros_like(returns).to(self.device) # (T,n_env)
+
+                for index in range(0, T, self.batch_size):
+                    end = min(T, index+self.batch_size)
+                    values[index:end] = self.model.value(states[index:end]).squeeze(-1)
+                    next_values[index:end] = self.model.value(next_states[index:end]).squeeze(-1)
+
                 gae = 0
 
                 for t in reversed(range(T)):
-                    
-                    delta = rewards[t] + self.gamma * next_values[t] * (1.0 - dones[t].to(int)) - values[t]
-                    gae = delta + self.gamma * self.gae_lambda * (1.0 - dones[t].to(int)) * gae
+
+                    dones = terminated[t].logical_or(truncated[t]).to(torch.float32)
+
+                    # theoretically here there should be bootstrap with truncation
+                    # but since according to the gymnasium's reset logic the next
+                    # state i would find here as s_t_plus_1 is the first one
+                    # of a new episode theres no bootstrap even if this is like
+                    # considering terminal a non-terminal state
+                    delta = rewards[t] + self.gamma * next_values[t] * (1.0 - dones) - values[t]
+
+                    gae = delta + self.gamma * self.gae_lambda * (1.0 - dones) * gae
                     advantages[t] = gae
-                    returns[t] = advantages[t] + values[t] 
-    
+                    returns[t] = advantages[t] + values[t]
+
             # td error advantage
 
             if self.advantage_type == "TD":
 
-                values = self.value_net(states).squeeze(-1)
-                next_values = self.value_net(next_states).squeeze(-1)
-                returns = rewards + self.gamma * next_values * (1.0 - dones.to(int))
+                returns = torch.zeros(T,self.n_env, dtype=torch.float32).to(self.device)
+                values = torch.zeros_like(returns).to(self.device) # (T,n_env)
+                next_values = torch.zeros_like(returns).to(self.device) # (T,n_env)
+
+                dones = terminated.logical_or(truncated).to(torch.float32)
+
+                for index in range(0, T, self.batch_size):
+                    end = min(T, index+self.batch_size)
+                    values[index:end] = self.model.value(states[index:end]).squeeze(-1)
+                    next_values[index:end] = self.model.value(next_states[index:end]).squeeze(-1)
+
+                returns = rewards + self.gamma * next_values * (1.0 - dones)
                 returns = returns.to(torch.float32)
                 TD_errors = returns - values
-            
+
                 advantages = TD_errors
 
             # monte carlo advantage (assuming the last timestep is the end of an episode)
 
-            # in MC estimates we don't bootstrap and for this reason all the
+            # MC estimates don't bootstrap and for this reason all the
             # data from the last incomplete episodes should be just ignored
-            # but to keep the implementation simple and readable it will be not
-            # hopefully it will be like a small source of noise and if the data
-            # from incomplete episodes wil be just a small percentage of the 
+            # but it will be not to keep the implementation simple and readable
+            # hopefully it will be like a source of noise and if the data
+            # from incomplete episodes will be just a small percentage of the
             # buffer the model will still be able to learn
 
-            if self.advantage_type == "MC" or self.advantage_type == None:
+            if self.advantage_type == "MC":
 
-                values = self.value_net(states).squeeze(-1)
-                returns = torch.zeros(T, self.n_env, dtype=torch.float32).to(self.device)
-                for t in reversed(range(T)):
-                    returns[t] = rewards[t] + self.gamma * returns[t] * (1.0 - dones[t].to(int))
+                returns = torch.zeros(T,self.n_env, dtype=torch.float32).to(self.device)
+                values = torch.zeros_like(returns).to(self.device) # (T,n_env)
 
-                if self.advantage_type == "MC":
-                    advantages = returns - values
-                else:
-                    advantages = returns
+                for index in range(0, T, self.batch_size):
+                    end = min(T, index+self.batch_size)
+                    values[index:end] = self.model.value(states[index:end]).squeeze(-1)
+
+                for t in reversed(range(len(returns))):
+                    dones = terminated[t].logical_or(truncated[t]).to(torch.float32)
+                    next_return = returns[t+1] if t + 1 < T else 0.0
+                    returns[t] = rewards[t] + self.gamma * next_return * (1.0 - dones[t])
+
+                advantages = returns - values
 
             # normalize advantages
-
             advantages = (advantages - advantages.mean()) / (advantages.std() + self.numerical_epsilon)
-    
-        # update value 
 
-        # multiple update steps with minibatches
-        for _ in range(self.value_epochs):
+        # update nets (only one gradient step)
 
-            # arrange the numbers from 0 to T randomly 
-            indices = torch.randperm(T) 
+        # compute value loss
 
-            for start in range(0, T, self.value_batch_size):
-                end = start + self.value_batch_size
-                mb_indices = indices[start:end]
-           
-                mb_states = states[mb_indices]
-                mb_returns = returns[mb_indices] 
-           
-                self.optim_value.zero_grad()
-           
-                value_pred = self.value_net(mb_states).squeeze(-1)
+        value_pred = self.model.value(states).squeeze(-1)
+        loss_v = self.loss_fn(value_pred, returns)
 
-                loss_value = self.mse(value_pred, mb_returns)
-                loss_value.backward()
+        # compute policy objective using policy gradient theorem (VPG)
 
-                # gradient clipping for more stability
-                torch.nn.utils.clip_grad_norm_(self.value_net.parameters(), 0.5)
-
-                self.optim_value.step()
-        
-        # update policy using policy gradient theorem (VPG)
-
-        self.optim_policy.zero_grad()
-
-        # generate a new distribution with the new net
-
-        if self.continuous_actions:
-
-            policy_net_out = self.policy_net(states)
-
-            means = policy_net_out[:,:,:self.action_space_dim]
-
-            if not self.separate_cov_params: 
-
-                if not self.diagonal_cov:
-                    cov_values = policy_net_out[:,:,self.action_space_dim:]\
-                                .reshape(-1,self.n_env,self.action_space_dim,
-                                            self.action_space_dim)
-                    cov = cov_values.transpose(-2,-1) @ cov_values + self.numerical_epsilon * torch.eye(self.action_space_dim).to(self.device)
-                else:
-                    cov = torch.diag_embed(torch.exp(policy_net_out[:,:,self.action_space_dim:]))
-
-            else:
-
-                # here cov will have shape (|A|,|A|) since it is made by
-                # a separate tensor but in distribution it will be 
-                # broadcasted to shape (B,n_env,|A|,|A|)
-
-                if not self.diagonal_cov:
-                    # this can lead to errors due to numerical instability
-                    cov = self.cov_values.T @ self.cov_values + self.numerical_epsilon * torch.eye(self.action_space_dim).to(self.device)
-                else:
-                    cov = torch.diag(torch.exp(self.log_var)) 
-
-            distributions = MultivariateNormal(means,cov)
-            log_probs = distributions.log_prob(actions)
-
-        else:
-
-            logits = self.policy_net(states)
-            distributions = Categorical(logits=logits)
-
+        distributions = self.model.compute_distributions(states)
         log_probs = distributions.log_prob(actions)
         entropy = distributions.entropy()
 
         # differentiating the objective will give the policy gradient
-        vpg_objective = (log_probs*advantages).mean()
+        vpg_objective = -(log_probs*advantages).mean()
 
         # entropy term to encourage exploration
-        vpg_objective += self.beta * entropy.mean()
-    
-        vpg_objective.backward()
-        self.optim_policy.step()
+        vpg_objective -= self.beta * entropy.mean()
+
+        loss = loss_v + vpg_objective
+
+        self.model.update_parameters(loss)
 
         # clear experience buffer
         self.buffer = []

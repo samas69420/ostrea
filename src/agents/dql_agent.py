@@ -7,6 +7,85 @@ from utils.checkpoint import CheckpointHandler
 from agents.base_agent import BaseAgent
 
 
+class Model:
+    """
+    class to manage neural networks separately, the idea is that even if
+    the learning algorithm uses some approximators it should be
+    approximator-agnostic and it shouldn't take care also of the internal
+    details of how the approximator is structured
+    """
+
+
+    def __init__(self,
+                 obs_size,
+                 action_space_dim,
+                 lr,
+                 device):
+
+        self.observation_is_3d_tensor = len(obs_size) == 3
+        self.device = device
+        self.action_space_dim = action_space_dim
+
+        if self.observation_is_3d_tensor:
+            raise NotImplementedError("currently only vector inputs are supported")
+
+        elif len(obs_size) == 1:
+            # input is a vector
+            value_net_input_dim = obs_size[0]
+
+        self.value_net = nn.Sequential(
+          nn.Linear(value_net_input_dim, 64),
+          nn.LeakyReLU(),
+          nn.Linear(64, 64),
+          nn.LeakyReLU(),
+          nn.Linear(64, self.action_space_dim)).to(self.device)
+
+        self.target_value_net = nn.Sequential(
+          nn.Linear(value_net_input_dim, 64),
+          nn.LeakyReLU(),
+          nn.Linear(64, 64),
+          nn.LeakyReLU(),
+          nn.Linear(64, self.action_space_dim)).to(self.device)
+
+        self.target_value_net.require_grad = False
+
+        self.optim = torch.optim.Adam(self.value_net.parameters(), lr = lr)
+
+
+    def value(self, obs, target_net = False):
+        if not target_net:
+            Qs = self.value_net(obs)
+        else:
+            Qs = self.target_value_net(obs)
+        return Qs
+
+
+    def update_target_net(self):
+        self.target_value_net.load_state_dict(self.value_net.state_dict())
+
+
+    def update_parameters(self, loss):
+
+        self.optim.zero_grad()
+        loss.backward()
+        self.optim.step()
+
+
+    def __str__(self):
+
+        result = ""
+
+        for name, obj in self.__dict__.items():
+            if isinstance(obj, torch.nn.Module):
+                result += "network: " + name + '\n'
+                result += str(obj) + '\n'
+            if isinstance(obj, torch.optim.Optimizer):
+                result += "optimizer: " + name + '\n'
+                result += str(obj) + '\n'
+
+        return result
+
+
 class DQLAgent(BaseAgent):
     
     """
@@ -29,7 +108,7 @@ class DQLAgent(BaseAgent):
         self.device = parameters.DEVICE
         self.eps = parameters.EPSILON
         self.gamma = parameters.GAMMA
-        self.value_lr = parameters.VALUE_LR
+        self.lr = parameters.LR
         self.memory_maxlen = parameters.MEMORY_MAXLEN
         self.memory_batch_size = parameters.MEMORY_BATCH_SIZE
         self.n_env = parameters.N_ENV
@@ -50,30 +129,10 @@ class DQLAgent(BaseAgent):
         self.buffer = []
         self.memory = ReplayMemory(maxlen=self.memory_maxlen)
 
-        observation_is_3dtensor = len(self.obs_size) == 3
-
-        if observation_is_3dtensor:
-            raise NotImplementedError("currently only vector inputs are supported")
-
-        elif len(self.obs_size) == 1:
-            # input is a vector
-            value_net_input_dim = self.obs_size[0]
-        
-        self.value_net = nn.Sequential(
-          nn.Linear(value_net_input_dim, 64),
-          nn.LeakyReLU(),
-          nn.Linear(64, 64),
-          nn.LeakyReLU(),
-          nn.Linear(64, self.action_space_dim)).to(self.device)
-
-        self.target_value_net = nn.Sequential(
-          nn.Linear(value_net_input_dim, 64),
-          nn.LeakyReLU(),
-          nn.Linear(64, 64),
-          nn.LeakyReLU(),
-          nn.Linear(64, self.action_space_dim)).to(self.device)
-
-        self.optim_value = torch.optim.Adam(self.value_net.parameters(), lr = self.value_lr)
+        self.model = Model(self.obs_size,
+                           self.action_space_dim,
+                           self.lr,
+                           self.device)
 
         self.checkpoint_handler = CheckpointHandler(self)
 
@@ -82,7 +141,7 @@ class DQLAgent(BaseAgent):
         else:
             print("no checkpoint, training new networks")
 
-        self.mse = torch.nn.MSELoss()
+        self.loss_fn = torch.nn.MSELoss()
 
 
     def decay_epsilon(self):
@@ -94,10 +153,10 @@ class DQLAgent(BaseAgent):
 
         self.tot_steps += 1
         if self.tot_steps % self.update_target_net_freq == 0:
-            self.target_value_net.load_state_dict(self.value_net.state_dict())
+            self.model.update_target_net()
         
         with torch.no_grad():
-            Qs = self.value_net(obs)
+            Qs = self.model.value(obs)
             max_actions = torch.argmax(Qs,dim=-1)
 
         random_actions = torch.randint(self.action_space_dim,(self.n_env,)).to(self.device)
@@ -114,7 +173,7 @@ class DQLAgent(BaseAgent):
     def choose_action_greedy(self, obs):
 
         with torch.no_grad():
-            Qs = self.value_net(obs)
+            Qs = self.model.value(obs)
             max_actions = torch.argmax(Qs,dim=-1)
 
         return max_actions
@@ -137,24 +196,27 @@ class DQLAgent(BaseAgent):
             actions = torch.cat([e[1] for e in batch])                   # (T*n_env)
             rewards = torch.cat([e[2] for e in batch]).to(torch.float32) # (T*n_env)
             next_states = torch.cat([e[3] for e in batch])      # (T*n_env,obs_size)
-            dones = torch.cat([e[4] for e in batch])                     # (T*n_env)
+            term = torch.cat([e[4] for e in batch])                     # (T*n_env)
+            trunc = torch.cat([e[5] for e in batch])                     # (T*n_env)
 
             # update Q network using the td(0) error evaluated using greedy policy
             # and computed on a batch of data sampled from replay memory
 
-            # Q(S_t,A_t) <- R_t+1 + not_done*gamma*max_a(Q(S_t+1,a))
+            # Q(S_t,A_t) <- R_t+1 + not_done*gamma*max_a(Qtarg(S_t+1,a))
+
+            # there should be bootstrapping for truncation
+            dones = term.logical_or(trunc)
 
             with torch.no_grad():
-                targets = rewards + self.gamma*(1-dones.to(int))*torch.max(self.target_value_net(next_states),dim=-1)[0]
+                next_values = self.model.value(next_states, target_net = True)
+                targets = rewards + self.gamma*(1-dones.to(int))*torch.max(next_values,dim=-1)[0]
 
-            Q_s = self.value_net(states)
+            Q_s = self.model.value(states)
             Q_s_a = torch.gather(Q_s,1,actions.unsqueeze(1)).squeeze()
 
-            loss = self.mse(targets,Q_s_a)
+            loss = self.loss_fn(targets,Q_s_a)
 
-            self.optim_value.zero_grad()
-            loss.backward()
-            self.optim_value.step()
+            self.model.update_parameters(loss)
 
         if self.use_decay:
             self.decay_epsilon()

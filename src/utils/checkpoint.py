@@ -50,31 +50,24 @@ class CheckpointHandler:
         iterate over all agent's members and extract all isolated nn.Parameters
         """
         params_dict = {}
-        for name, value in self.agent.__dict__.items():
+        for name, value in self.agent.model.__dict__.items():
             if isinstance(value, torch.nn.Parameter):
                 params_dict[name] = value.data.cpu()
                 
         return params_dict
     
 
-    def _get_network_states(self, full = True):
+    def _get_network_states(self):
         """
-        iterate over all agent's members and return a dict of all nn.Modules 
-        objects if it is for a full checkpoint or only the network used for 
-        inference 
+        iterate over all model's members and return a dict of all nn.Module
+        objects
         """
         networks = {}
-        for name, obj in self.agent.__dict__.items():
+        for name, obj in self.agent.model.__dict__.items():
             if isinstance(obj, torch.nn.Module):
                 networks[name] = obj.state_dict()
 
-        if full:
-            result = networks
-        else:
-            result = {"policy_net":networks["policy_net"]} if self.agent.policy_method \
-                     else {"value_net":networks["value_net"]}
-
-        return result 
+        return networks
     
 
     def _get_optimizer_states(self):
@@ -83,7 +76,7 @@ class CheckpointHandler:
         optim.Optimizers objs
         """
         optimizers = {}
-        for name, obj in self.agent.__dict__.items():
+        for name, obj in self.agent.model.__dict__.items():
             if isinstance(obj, torch.optim.Optimizer):
                 optimizers[name] = obj.state_dict()
 
@@ -92,7 +85,7 @@ class CheckpointHandler:
 
     def save(self, checkpoint_path, full=True):
 
-        checkpoint = {'networks': self._get_network_states(full)}
+        checkpoint = {'networks': self._get_network_states()}
 
         if full:
             checkpoint.update({
@@ -116,8 +109,8 @@ class CheckpointHandler:
         
         # load networks, this is needed for both testing and training
         for name, state_dict in checkpoint['networks'].items():
-            if hasattr(self.agent, name):
-                network = getattr(self.agent, name)
+            if hasattr(self.agent.model, name):
+                network = getattr(self.agent.model, name)
                 if isinstance(network, torch.nn.Module):
                     network.load_state_dict(state_dict)
                     print(f"loaded network: {name}")
@@ -126,8 +119,8 @@ class CheckpointHandler:
         if 'parameters' in checkpoint:
             for name, value in checkpoint['parameters'].items():
                 if isinstance(value, torch.Tensor):
-                    if hasattr(self.agent, name):
-                        param = getattr(self.agent, name)
+                    if hasattr(self.agent.model, name):
+                        param = getattr(self.agent.model, name)
                         if isinstance(param, torch.nn.Parameter):
                             param.data = value.to(device)
                             print(f"loaded parameter: {name}")
@@ -135,8 +128,8 @@ class CheckpointHandler:
         # load optimizer states if available
         if 'optimizers' in checkpoint:
             for name, optim_state in checkpoint['optimizers'].items():
-                if hasattr(self.agent, name):
-                    optimizer = getattr(self.agent, name)
+                if hasattr(self.agent.model, name):
+                    optimizer = getattr(self.agent.model, name)
                     if isinstance(optimizer, torch.optim.Optimizer):
                         optimizer.load_state_dict(optim_state)
                         print(f"loaded optimizer: {name}")

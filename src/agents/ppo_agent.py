@@ -5,24 +5,277 @@ from torch.distributions.categorical import Categorical
 from utils.checkpoint import CheckpointHandler
 from agents.base_agent import BaseAgent
 
-class SqueezeAll(torch.nn.Module):
+
+class Model:
     """
-    module needed after the conv body to convert the output shape of the last
-    convolution from (NCHW)/(CHW) -> (N,C)/(C,) ready for the mlp
-    
-    torch.nn.Flatten does not work cause when H,W = 1,1
-    dim = 1 (NCHW)/(CHW) -> (N,C)/(C,1)
-    dim = 0 (NCHW)/(CHW) -> (N*C)/(C,)
+    class to manage neural networks separately, the idea is that even if
+    the learning algorithm uses some approximators it should be
+    approximator-agnostic and it shouldn't take care also of the internal
+    details of how the approximator is structured
     """
-    def forward(self, x):
-        return x.squeeze() 
+
+    def __init__(self,
+                 obs_size,
+                 action_space_dim,
+                 continuous_actions,
+                 lr,
+                 diagonal_cov,
+                 min_cov,
+                 separate_cov_params,
+                 device,
+                 numerical_epsilon):
+
+        self.observation_is_3d_tensor = len(obs_size) == 3
+        self.device = device
+        self.separate_cov_params = separate_cov_params
+        self.diagonal_cov = diagonal_cov
+        self.continuous_actions = continuous_actions
+        self.action_space_dim = action_space_dim
+        self.min_cov = min_cov
+        self.numerical_epsilon = numerical_epsilon
+
+        # compute net outputs
+
+        if self.continuous_actions == True:
+
+            if not self.separate_cov_params:
+
+                # number of means + number of elements for covariance matrix
+                if not self.diagonal_cov:
+                    policy_net_output_dim = action_space_dim + action_space_dim**2
+                else:
+                    policy_net_output_dim = 2*action_space_dim
+            else:
+                policy_net_output_dim = action_space_dim
+
+                if not self.diagonal_cov:
+                    self.cov_values = nn.Parameter(torch.rand(action_space_dim, action_space_dim).to(self.device))
+                else:
+                    self.log_var = nn.Parameter(torch.ones(action_space_dim).to(self.device))
+
+        else:
+            policy_net_output_dim = action_space_dim
+
+        # compute net inputs
+
+        if self.observation_is_3d_tensor:
+            # fixed when the input is a tensor and needs to be encoded first
+            mlp_input = 100
+
+        elif len(obs_size) == 1:
+            # input is already a vector
+            mlp_input = obs_size[0]
+
+        self.policy_net = nn.Sequential(
+          nn.Linear(mlp_input, 256),
+          nn.LeakyReLU(),
+          nn.Linear(256, 256),
+          nn.LeakyReLU(),
+          nn.Linear(256, 256),
+          nn.LeakyReLU(),
+          nn.Linear(256, policy_net_output_dim)).to(self.device)
+
+        self.value_net = nn.Sequential(
+          nn.Linear(mlp_input, 256),
+          nn.LeakyReLU(),
+          nn.Linear(256, 256),
+          nn.LeakyReLU(),
+          nn.Linear(256, 256),
+          nn.LeakyReLU(),
+          nn.Linear(256, 1)).to(self.device)
+
+        all_params = list(self.policy_net.parameters())\
+                   + list(self.value_net.parameters())
+
+        if self.observation_is_3d_tensor:
+
+            # add a shared convolutional encoder
+
+            self.encoder = torch.nn.Sequential(
+                               torch.nn.Conv2d(obs_size[0], 32, kernel_size = 4, stride = 4, padding = "valid"),
+                               torch.nn.ReLU(),
+                               torch.nn.Conv2d(32, 64, kernel_size = 3, stride = 2, padding = "valid"),
+                               torch.nn.ReLU(),
+                               torch.nn.Conv2d(64, 128, kernel_size = 3, stride = 2, padding = "valid"),
+                               torch.nn.ReLU(),
+                               torch.nn.Conv2d(128, 256, kernel_size = 3, padding = "valid"),
+                               torch.nn.ReLU(),
+                               torch.nn.Conv2d(256, mlp_input, kernel_size = 3, padding = "valid"),
+                               torch.nn.ReLU(),
+                               torch.nn.AdaptiveAvgPool2d((1,1))).to(self.device)
+
+            all_params += list(self.encoder.parameters())
+
+        if continuous_actions == True:
+            if separate_cov_params:
+                if not diagonal_cov:
+                    all_params.append(self.cov_values)
+                else:
+                    all_params.append(self.log_var)
+
+        self.optim = torch.optim.Adam(all_params,
+                     lr = lr)
+
+
+    def encode(self, obs):
+        """
+        turn observation in vector if it isn't already
+
+        returns a tensor of shape:
+        (n_env, n)    - training
+        (T, n_env, n) - update
+        (n)           - inference/eval
+
+        where n is the vector size and T is the buffer size
+        """
+
+        if self.observation_is_3d_tensor:
+            if len(obs.shape) == 5:
+                T,n_env,c,w,h = obs.shape
+                obs = self.encoder(obs.flatten(0,1))
+                obs = obs.squeeze()
+                obs = obs.reshape(T,n_env,-1)
+            else:
+                obs = self.encoder(obs)
+                obs = obs.squeeze()
+
+        return obs
+
+
+    def update_parameters(self, loss):
+        """
+        update the internal parameters of the approximators (networks weights)
+        """
+
+        self.optim.zero_grad()
+
+        loss.backward()
+
+        # gradient clipping for more stability
+        for name, obj in self.__dict__.items():
+            if isinstance(obj, torch.nn.Module):
+                torch.nn.utils.clip_grad_norm_(obj.parameters(), 0.5)
+
+        self.optim.step()
+
+
+    def value(self, vec_obs):
+        """
+        compute the value of a observation using the value approximator
+        takes only batched vector obs of shape (B, n_env, n)
+        where B is the arbitrary batch size chosen to process the buffer
+        """
+        return self.value_net(vec_obs)
+
+
+    def compute_action(self, vec_obs):
+        """
+        compute action deterministically for inference/eval
+        takes only vector observation of shape (n)
+        """
+
+        if self.continuous_actions:
+
+            # get only the means as actions
+
+            policy_net_out = self.policy_net(vec_obs)
+            action = policy_net_out[:self.action_space_dim]
+
+        else:
+
+            # compute probs and return the action with the highest one
+
+            logits  = self.policy_net(vec_obs)
+            probs_distribution = Categorical(logits=logits)
+            action = probs_distribution.probs.argmax()
+
+        return action
+
+
+    def compute_distributions(self, vec_obs):
+        """
+        use the approximators to compute the probability distributions
+        for the input
+        takes only batched vector obs of shape: (B,n_env,n)
+        where B is the arbitrary batch size chosen to process the buffer
+        """
+        n_samp,n_env,vec_size = vec_obs.shape
+
+        if self.continuous_actions:
+
+            # create probability distribution (n-d gaussian)
+
+            # run the policy to get means and covariances
+            policy_net_out = self.policy_net(vec_obs)
+
+            means = policy_net_out[:,:,:self.action_space_dim]
+
+            if not self.separate_cov_params:
+
+                if not self.diagonal_cov:
+
+                    # this can lead to errors due to numerical instability
+                    cov_values = policy_net_out[:,:,self.action_space_dim:]\
+                                 .reshape(-1,
+                                          self.action_space_dim,
+                                          self.action_space_dim)
+
+                    cov = cov_values.mT @ cov_values + self.numerical_epsilon * torch.eye(self.action_space_dim).to(self.device)
+                    cov = cov.reshape(-1,n_env,self.action_space_dim,self.action_space_dim)
+
+                else:
+
+                    cov_values = policy_net_out[:,:,self.action_space_dim:]
+                    cov = torch.stack([torch.diag(torch.exp(e).clamp(min=self.min_cov)) for e in cov_values.reshape(-1,self.action_space_dim)])
+                    cov = cov.reshape(-1,n_env,self.action_space_dim,self.action_space_dim)
+
+            else:
+
+                if not self.diagonal_cov:
+
+                    # this can lead to errors due to numerical instability
+                    cov = self.cov_values.T @ self.cov_values + self.numerical_epsilon * torch.eye(self.action_space_dim).to(self.device)
+
+                else:
+
+                    cov = torch.diag(torch.exp(self.log_var).clamp(min=self.min_cov))
+
+            probs_distribution = MultivariateNormal(means,cov)
+
+        else:
+
+            # run the policy to get logits
+            logits  = self.policy_net(vec_obs)
+
+            # create the discrete distribution
+            probs_distribution = Categorical(logits=logits)
+
+        return probs_distribution
+
+
+    def __str__(self):
+
+        result = ""
+
+        for name, obj in self.__dict__.items():
+            if isinstance(obj, torch.nn.Module):
+                result += "network: " + name + '\n'
+                result += str(obj) + '\n'
+            if isinstance(obj, torch.optim.Optimizer):
+                result += "optimizer: " + name + '\n'
+                result += str(obj) + '\n'
+
+        return result
+
 
 class PPOAgent(BaseAgent):
 
     """
     implementation of a reinforcement learning agent that uses PPO algorithm
 
-    This implementation can be used in environments with both 
+    this implementation supports 1d and 3d continuous observation spaces
+
+    this implementation can be used in environments with both
     continuous and discrete action spaces
 
     with continuous actions the policy network will compute 
@@ -67,14 +320,11 @@ class PPOAgent(BaseAgent):
         self.diagonal_cov = parameters.DIAGONAL_COV_MATRIX
         self.separate_cov_params = parameters.SEPARATE_COV_PARAMS 
         self.min_cov = parameters.MIN_COV
-        self.value_batch_size = parameters.VALUE_BATCH_SIZE
-        self.policy_batch_size = parameters.POLICY_BATCH_SIZE
-        self.value_epochs = parameters.VALUE_EPOCHS 
-        self.policy_epochs = parameters.POLICY_EPOCHS 
+        self.batch_size = parameters.BATCH_SIZE
+        self.epochs = parameters.EPOCHS
         self.device = parameters.DEVICE
         self.n_env = parameters.N_ENV
-        self.policy_lr = parameters.POLICY_LR
-        self.value_lr = parameters.VALUE_LR
+        self.lr = parameters.LR
         self.policy_method = parameters.POLICY_METHOD
         self.squash_action = parameters.SQUASH_ACTION
 
@@ -87,91 +337,18 @@ class PPOAgent(BaseAgent):
 
         self.buffer = []
 
-        if self.continuous_actions == True:
+        # create the models
+        # (MLPs for vector observations, CNN + MLPs for 3d-tensors observations)
 
-            if not self.separate_cov_params: 
-
-                # number of means + number of elements for covariance matrix
-                if not self.diagonal_cov:
-                    policy_net_output_dim = self.action_space_dim + self.action_space_dim**2 
-                else:
-                    policy_net_output_dim = 2*self.action_space_dim
-            else:
-                policy_net_output_dim = self.action_space_dim
-                if not self.diagonal_cov:
-                    self.cov_values = nn.Parameter(torch.rand(self.action_space_dim, self.action_space_dim).to(self.device))
-                else:
-                    self.log_var = nn.Parameter(torch.ones(self.action_space_dim).to(self.device))
-
-        else:
-            policy_net_output_dim = self.action_space_dim
-
-        observation_is_3dtensor = len(self.obs_size) == 3
-
-        if observation_is_3dtensor:
-            # fix the in size for mlp and add a conv body later
-            mlp_input = 256
-
-        elif len(self.obs_size) == 1:
-            # input is a vector
-            mlp_input = self.obs_size[0]
-
-        self.policy_net = nn.Sequential(
-          nn.Linear(mlp_input, 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, policy_net_output_dim)).to(self.device)
-
-        self.value_net = nn.Sequential(
-          nn.Linear(mlp_input, 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, 1)).to(self.device)
-
-        if observation_is_3dtensor:
-
-            # add a convolution body before the mlp
-
-            self.policy_net = torch.nn.Sequential(
-                                    torch.nn.Conv2d(self.obs_size[0], 64, kernel_size = 3, stride = 4, padding = "valid"),
-                                    torch.nn.ReLU(),
-                                    torch.nn.Conv2d(64, 64, kernel_size = 3, stride = 2, padding = "valid"),
-                                    torch.nn.ReLU(),
-                                    torch.nn.Conv2d(64, mlp_input, kernel_size = 3, padding = "valid"),
-                                    torch.nn.ReLU(),
-                                    torch.nn.AdaptiveAvgPool2d((1,1)),
-                                    SqueezeAll()).to(self.device)\
-                                    .extend(self.policy_net)
-
-            self.value_net = torch.nn.Sequential(
-                                    torch.nn.Conv2d(self.obs_size[0], 64, kernel_size = 3, stride = 4,  padding = "valid"),
-                                    torch.nn.ReLU(),
-                                    torch.nn.Conv2d(64, 64, kernel_size = 3, stride = 2, padding = "valid"),
-                                    torch.nn.ReLU(),
-                                    torch.nn.Conv2d(64, mlp_input, kernel_size = 3, padding = "valid"),
-                                    torch.nn.ReLU(),
-                                    torch.nn.AdaptiveAvgPool2d((1,1)),
-                                    SqueezeAll()).to(self.device)\
-                                    .extend(self.value_net)
-
-        # group together all the trainable parameters used by the policy
-
-        all_policy_params = list(self.policy_net.parameters())
-
-        if self.continuous_actions == True:
-            if self.separate_cov_params:
-                if not self.diagonal_cov:
-                    all_policy_params.append(self.cov_values)
-                else:
-                    all_policy_params.append(self.log_var)
-
-        self.optim_policy = torch.optim.Adam(all_policy_params,
-                            lr = self.policy_lr)
-
-        self.optim_value = torch.optim.Adam(self.value_net.parameters(),
-                           lr = self.value_lr)
+        self.model = Model(self.obs_size,
+                           self.action_space_dim,
+                           self.continuous_actions,
+                           self.lr,
+                           self.diagonal_cov,
+                           self.min_cov,
+                           self.separate_cov_params,
+                           self.device,
+                           self.numerical_epsilon)
 
         self.checkpoint_handler = CheckpointHandler(self)
 
@@ -180,65 +357,26 @@ class PPOAgent(BaseAgent):
         else:
             print("no checkpoint, training new networks")
 
-        self.mse = torch.nn.MSELoss()
+        self.loss_fn = torch.nn.MSELoss()
+
 
     def choose_action(self, obs):
 
+        obs = self.model.encode(obs) # out shape: [n_env, vec]
+
+        # add a external dimension because all the methods used to work with
+        # observations assume they are 3d tensors
+        obs = obs.unsqueeze(dim=0)
+
         with torch.no_grad():
 
-            # generate a distribution with the net, then sample from it 
+            # generate a distribution with the net, then sample from it
 
-            if self.continuous_actions:
+            probs_distribution = self.model.compute_distributions(obs)
 
-                # create probability distribution (n-d gaussian) 
+            action = probs_distribution.sample().squeeze()
 
-                # run the policy to get means and covariances
-                policy_net_out = self.policy_net(obs)
-
-                means = policy_net_out[:,:self.action_space_dim]
-
-                if not self.separate_cov_params:
-                
-                    if not self.diagonal_cov:
-
-                        # this can lead to errors due to numerical instability
-                        cov_values = policy_net_out[:,self.action_space_dim:]\
-                                     .reshape(-1,
-                                              self.action_space_dim,
-                                              self.action_space_dim)
-                        cov = cov_values.mT @ cov_values + self.numerical_epsilon * torch.eye(self.action_space_dim).to(self.device)
-
-                    else:
-
-                        cov_values = policy_net_out[:,self.action_space_dim:]
-                        cov = torch.stack([torch.diag(torch.exp(e).clamp(min=self.min_cov)) for e in cov_values])
-
-                else:
-
-                    if not self.diagonal_cov:
-
-                        # this can lead to errors due to numerical instability
-                        cov = self.cov_values.T @ self.cov_values + self.numerical_epsilon * torch.eye(self.action_space_dim).to(self.device)
-
-                    else:
-
-                        cov = torch.diag(torch.exp(self.log_var).clamp(min=self.min_cov))
-
-                probs_distribution = MultivariateNormal(means,cov)
-
-            else:
-
-                # run the policy to get logits
-                logits  = self.policy_net(obs)
-
-                # create the discrete distribution
-                probs_distribution = Categorical(logits=logits)
-
-            # sample from prob distribution
-            action = probs_distribution.sample()
-
-            # return also the probability of the action sampled (for later)
-            log_prob_action = probs_distribution.log_prob(action)
+            log_prob_action = probs_distribution.log_prob(action).squeeze()
 
             if self.continuous_actions and self.squash_action:
 
@@ -253,25 +391,14 @@ class PPOAgent(BaseAgent):
 
     def choose_action_greedy(self, obs):
 
+        obs = self.model.encode(obs)
+
         with torch.no_grad():
 
-            if self.continuous_actions:
-    
-                # get only the means as actions 
-            
-                policy_net_out = self.policy_net(obs)
-                action = policy_net_out[:self.action_space_dim] 
+            action = self.model.compute_action(obs)
 
-                if self.squash_action:
+            if self.continuous_actions and self.squash_action:
                     action = torch.tanh(action)
-
-            else:
-
-                # compute probs and return the action with the highest one 
-
-                logits  = self.policy_net(obs)
-                probs_distribution = Categorical(logits=logits)
-                action = probs_distribution.probs.argmax()
 
         return action
 
@@ -293,40 +420,48 @@ class PPOAgent(BaseAgent):
         actions = torch.stack([t[1] for t in self.buffer])
         rewards = torch.stack([t[2] for t in self.buffer])
         next_states = torch.stack([t[3] for t in self.buffer])
-        dones = torch.stack([t[4] for t in self.buffer])
-        log_probs_old = torch.stack([t[5] for t in self.buffer])
-
-        # merge timesteps and envs dim
-        states = states.flatten(0,1)
-        actions = actions.flatten(0,1)
-        rewards = rewards.flatten(0,1)
-        next_states = next_states.flatten(0,1)
-        dones = dones.flatten(0,1)
-        log_probs_old = log_probs_old.flatten(0,1)
+        terminated = torch.stack([t[4] for t in self.buffer])
+        truncated = torch.stack([t[5] for t in self.buffer])
+        log_probs_old = torch.stack([t[6] for t in self.buffer])
 
         with torch.no_grad():
+
+            enc_states = self.model.encode(states)
+            enc_next_states = self.model.encode(next_states)
 
             # generalized advantage estimators
 
             if self.advantage_type == "GAE":
 
-                advantages = torch.zeros(T*self.n_env, dtype=torch.float32).to(self.device)
-                returns = torch.zeros(T*self.n_env, dtype=torch.float32).to(self.device)
+                # note: according to the current version of the code the time
+                # dimension and the env dimension should stay separated for GAEs
+                # to be computed correctly
 
-                values = torch.zeros_like(returns).to(self.device) # (T*n_env)
-                next_values = torch.zeros_like(returns).to(self.device) # (T*n_env)
+                advantages = torch.zeros(T,self.n_env, dtype=torch.float32).to(self.device)
+                returns = torch.zeros(T,self.n_env, dtype=torch.float32).to(self.device)
 
-                # compute values and next values in batches or the memory consumption explodes with tensor observations
-                for index in range(0,(T*self.n_env)-self.value_batch_size, self.value_batch_size):
-                    values[index:index+self.value_batch_size] = self.value_net(states[index:index+self.value_batch_size]).squeeze(-1)           
-                    next_values[index:index+self.value_batch_size] = self.value_net(next_states[index:index+self.value_batch_size]).squeeze(-1) 
+                values = torch.zeros_like(returns).to(self.device) # (T,n_env)
+                next_values = torch.zeros_like(returns).to(self.device) # (T,n_env)
+
+                for index in range(0, T, self.batch_size):
+                    end = min(T, index+self.batch_size)
+                    values[index:end] = self.model.value(enc_states[index:end]).squeeze(-1)
+                    next_values[index:end] = self.model.value(enc_next_states[index:end]).squeeze(-1)
                 
                 gae = 0
 
-                for t in reversed(range(len(returns))):
+                for t in reversed(range(T)):
                     
-                    delta = rewards[t] + self.gamma * next_values[t] * (1.0 - dones[t].to(int)) - values[t]
-                    gae = delta + self.gamma * self.gae_lambda * (1.0 - dones[t].to(int)) * gae
+                    dones = terminated[t].logical_or(truncated[t]).to(torch.float32)
+
+                    # theoretically here there should be bootstrap with truncation
+                    # but since according to the gymnasium's reset logic the next
+                    # state i would find here as s_t_plus_1 is the first one
+                    # of a new episode theres no bootstrap even if this is like
+                    # considering terminal a non-terminal state
+                    delta = rewards[t] + self.gamma * next_values[t] * (1.0 - dones) - values[t]
+
+                    gae = delta + self.gamma * self.gae_lambda * (1.0 - dones) * gae
                     advantages[t] = gae
                     returns[t] = advantages[t] + values[t] 
     
@@ -334,9 +469,18 @@ class PPOAgent(BaseAgent):
 
             if self.advantage_type == "TD":
 
-                values = self.value_net(states).squeeze(-1)
-                next_values = self.value_net(next_states).squeeze(-1)
-                returns = rewards + self.gamma * next_values * (1.0 - dones.to(int))
+                returns = torch.zeros(T,self.n_env, dtype=torch.float32).to(self.device)
+                values = torch.zeros_like(returns).to(self.device) # (T,n_env)
+                next_values = torch.zeros_like(returns).to(self.device) # (T,n_env)
+
+                dones = terminated.logical_or(truncated).to(torch.float32)
+
+                for index in range(0, T, self.batch_size):
+                    end = min(T, index+self.batch_size)
+                    values[index:end] = self.model.value(enc_states[index:end]).squeeze(-1)
+                    next_values[index:end] = self.model.value(enc_next_states[index:end]).squeeze(-1)
+
+                returns = rewards + self.gamma * next_values * (1.0 - dones)
                 returns = returns.to(torch.float32)
                 TD_errors = returns - values
             
@@ -344,104 +488,62 @@ class PPOAgent(BaseAgent):
 
             # monte carlo advantage (assuming the last timestep is the end of an episode)
 
-            # in MC estimates we don't bootstrap and for this reason all the
+            # MC estimates don't bootstrap and for this reason all the
             # data from the last incomplete episodes should be just ignored
-            # but to keep the implementation simple and readable it will be not
-            # hopefully it will be like a small source of noise and if the data
-            # from incomplete episodes wil be just a small percentage of the 
+            # but it will be not to keep the implementation simple and readable
+            # hopefully it will be like a source of noise and if the data
+            # from incomplete episodes will be just a small percentage of the
             # buffer the model will still be able to learn
 
             if self.advantage_type == "MC":
 
-                values = self.value_net(states).squeeze(-1)
-                returns = torch.zeros(T*self.n_env, dtype=torch.float32).to(self.device)
+                returns = torch.zeros(T,self.n_env, dtype=torch.float32).to(self.device)
+                values = torch.zeros_like(returns).to(self.device) # (T,n_env)
+
+                for index in range(0, T, self.batch_size):
+                    end = min(T, index+self.batch_size)
+                    values[index:end] = self.model.value(enc_states[index:end]).squeeze(-1)
+
                 for t in reversed(range(len(returns))):
-                    returns[t] = rewards[t] + self.gamma * returns[t] * (1.0 - dones[t].to(int))
+                    dones = terminated[t].logical_or(truncated[t]).to(torch.float32)
+                    next_return = returns[t+1] if t + 1 < T else 0.0
+                    returns[t] = rewards[t] + self.gamma * next_return * (1.0 - dones[t])
 
                 advantages = returns - values
 
             # normalize advantages
-
             advantages = (advantages - advantages.mean()) / (advantages.std() + self.numerical_epsilon)
     
-        # update value net (actually this should be called advantage net)
+        # update nets
 
         # multiple update steps with minibatches
-        for _ in range(self.value_epochs):
+        for _ in range(self.epochs):
 
-            # arrange as much numbers as the elements of returns randomly 
-            indices = torch.randperm(len(returns)) 
+            indices = torch.randperm(T)
 
-            for start in range(0, len(returns), self.value_batch_size):
-                end = start + self.value_batch_size
+            for start in range(0, T, self.batch_size):
+
+                end = min(T, start+self.batch_size)
                 mb_indices = indices[start:end]
-           
+
                 mb_states = states[mb_indices]
-                mb_returns = returns[mb_indices] 
-           
-                self.optim_value.zero_grad()
-           
-                value_pred = self.value_net(mb_states).squeeze(-1)
-
-                loss_value = self.mse(value_pred, mb_returns)
-                loss_value.backward()
-
-                # gradient clipping for more stability
-                torch.nn.utils.clip_grad_norm_(self.value_net.parameters(), 0.5)
-
-                self.optim_value.step()
-        
-        # update policy with the clipped objective (PPO)
-
-        for _ in range(self.policy_epochs):
-
-            # arrange as much numbers as the elements of returns randomly 
-            indices = torch.randperm(len(returns)) 
-
-            for start in range(0, len(returns), self.policy_batch_size):
-
-                end = start + self.policy_batch_size
-                mb_indices = indices[start:end]
-           
-                mb_states = states[mb_indices]
+                mb_returns = returns[mb_indices]
                 mb_actions = actions[mb_indices]
                 mb_advantages = advantages[mb_indices]
                 mb_log_probs_old = log_probs_old[mb_indices]
 
-                self.optim_policy.zero_grad()
+                # compute value loss
 
-                # generate a new distribution with the new net
+                mb_states = self.model.encode(mb_states)
+
+                value_pred = self.model.value(mb_states).squeeze(-1)
+                loss_v = self.loss_fn(value_pred, mb_returns)
+
+                # compute policy objective
+
+                distributions = self.model.compute_distributions(mb_states)
 
                 if self.continuous_actions:
-
-                    policy_net_out = self.policy_net(mb_states)
-
-                    means = policy_net_out[:,:self.action_space_dim]
-
-                    if not self.separate_cov_params: 
-
-                        if not self.diagonal_cov:
-                            #TODO test this part
-                            cov_values = policy_net_out[:,self.action_space_dim:]\
-                                        .reshape(-1,self.action_space_dim,
-                                                    self.action_space_dim)
-                            cov = cov_values.transpose(-2,-1) @ cov_values + self.numerical_epsilon * torch.eye(self.action_space_dim).to(self.device)
-                        else:
-                            cov = torch.diag_embed(torch.exp(policy_net_out[:,self.action_space_dim:]))
-
-                    else:
-
-                        # here cov will have shape (|A|,|A|) since it is made by
-                        # a separate tensor but in distribution it will be 
-                        # broadcasted to shape (B,n_env,|A|,|A|)
-
-                        if not self.diagonal_cov:
-                            # this can lead to errors due to numerical instability
-                            cov = self.cov_values.T @ self.cov_values + self.numerical_epsilon * torch.eye(self.action_space_dim).to(self.device)
-                        else:
-                            cov = torch.diag(torch.exp(self.log_var)) 
-
-                    distributions = MultivariateNormal(means,cov)
 
                     if self.squash_action:
 
@@ -456,27 +558,22 @@ class PPOAgent(BaseAgent):
 
                 elif not self.continuous_actions:
 
-                    logits = self.policy_net(mb_states)
-                    distributions = Categorical(logits=logits)
                     log_probs = distributions.log_prob(mb_actions)
 
-                # this is always the entropy of the gaussian distributions with or without squashing
+                # it doesn't really matter to correct entropy for squashed actions
                 entropy = distributions.entropy()
 
                 ratio = torch.exp(log_probs - mb_log_probs_old)
 
-                ppo_objective = -1 * torch.min(ratio*mb_advantages,
-                                               torch.clip(ratio,
-                                                          1-self.epsilon,
-                                                          1+self.epsilon)\
-                                                *mb_advantages).mean()
+                ppo_objective = -torch.min(ratio*mb_advantages,
+                                           torch.clip(ratio,
+                                                      1-self.epsilon,
+                                                      1+self.epsilon)\
+                                            *mb_advantages).mean()
 
-                ppo_objective -= self.beta*entropy.mean()
+                loss = 0.5*loss_v + ppo_objective - self.beta*entropy.mean()
     
-                ppo_objective.backward()
-                # gradient clipping for more stability
-                torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 0.5)
-                self.optim_policy.step()
+                self.model.update_parameters(loss)
 
         # clear experience buffer
         self.buffer = []

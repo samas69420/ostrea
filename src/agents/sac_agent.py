@@ -7,6 +7,333 @@ from utils.replaymemory import ReplayMemory
 from agents.base_agent import BaseAgent
 
 
+class Model:
+    """
+    class to manage neural networks separately, the idea is that even if
+    the learning algorithm uses some approximators it should be
+    approximator-agnostic and it shouldn't take care also of the internal
+    details of how the approximator is structured
+    """
+
+    def __init__(self,
+                 obs_size,
+                 action_space_dim,
+                 continuous_actions,
+                 lr,
+                 min_logvar,
+                 max_logvar,
+                 device,
+                 tau,
+                 double_q_net,
+                 alpha,
+                 target_h,
+                 numerical_epsilon):
+
+        self.observation_is_3d_tensor = len(obs_size) == 3
+        self.device = device
+        self.continuous_actions = continuous_actions
+        self.action_space_dim = action_space_dim
+        self.min_logvar = min_logvar
+        self.max_logvar = max_logvar
+        self.numerical_epsilon = numerical_epsilon
+        self.tau = tau
+        self.double_q_net = double_q_net
+        self.alpha = alpha
+
+        if self.observation_is_3d_tensor:
+            raise NotImplementedError("currently only vector inputs are supported")
+
+        elif len(obs_size) == 1:
+            # input is a vector
+
+            policy_net_input_dim = obs_size[0]
+
+            if self.continuous_actions:
+                policy_net_output_dim = 2*self.action_space_dim
+                value_net_input_dim = obs_size[0] + self.action_space_dim
+                value_net_output_dim = 1
+            else:
+                policy_net_output_dim = self.action_space_dim
+                value_net_input_dim = obs_size[0]
+                value_net_output_dim = self.action_space_dim
+
+        self.policy_net = nn.Sequential(
+          nn.Linear(policy_net_input_dim, 256),
+          nn.LeakyReLU(),
+          nn.Linear(256, 256),
+          nn.LeakyReLU(),
+          nn.Linear(256, 256),
+          nn.LeakyReLU(),
+          nn.Linear(256, policy_net_output_dim)).to(self.device)
+
+        self.value_net = nn.Sequential(
+          nn.Linear(value_net_input_dim , 256),
+          nn.LeakyReLU(),
+          nn.Linear(256, 256),
+          nn.LeakyReLU(),
+          nn.Linear(256, 256),
+          nn.LeakyReLU(),
+          nn.Linear(256, value_net_output_dim)).to(self.device)
+
+        self.target_value_net = nn.Sequential(
+          nn.Linear(value_net_input_dim , 256),
+          nn.LeakyReLU(),
+          nn.Linear(256, 256),
+          nn.LeakyReLU(),
+          nn.Linear(256, 256),
+          nn.LeakyReLU(),
+          nn.Linear(256, value_net_output_dim)).to(self.device)
+
+        self.target_value_net.requires_grad = False
+        self.target_value_net.load_state_dict(self.value_net.state_dict())
+
+        all_trainable_params = list(self.value_net.parameters()) + \
+                               list(self.policy_net.parameters())
+
+        if alpha == "auto":
+            self.log_alpha = torch.nn.Parameter(torch.zeros(1).to(self.device))
+            all_trainable_params += [self.log_alpha]
+        else:
+            self.log_alpha = torch.log(torch.tensor(self.alpha).to(self.device))
+
+        if self.double_q_net:
+
+            self.sec_value_net = nn.Sequential(
+              nn.Linear(value_net_input_dim , 256),
+              nn.LeakyReLU(),
+              nn.Linear(256, 256),
+              nn.LeakyReLU(),
+              nn.Linear(256, 256),
+              nn.LeakyReLU(),
+              nn.Linear(256, value_net_output_dim)).to(self.device)
+
+            self.target_sec_value_net = nn.Sequential(
+              nn.Linear(value_net_input_dim , 256),
+              nn.LeakyReLU(),
+              nn.Linear(256, 256),
+              nn.LeakyReLU(),
+              nn.Linear(256, 256),
+              nn.LeakyReLU(),
+              nn.Linear(256, value_net_output_dim)).to(self.device)
+
+            self.target_sec_value_net.requires_grad = False
+            self.target_sec_value_net.load_state_dict(self.sec_value_net.state_dict())
+            [all_trainable_params.append(e) for e in self.sec_value_net.parameters()]
+
+        self.optim = torch.optim.Adam(all_trainable_params, lr = lr)
+
+
+    def compute_action(self, vec_obs):
+        """
+        compute action deterministically for inference/eval
+        takes only vector observation of shape (n)
+        """
+
+        if self.continuous_actions:
+
+            # get only the (squashed) means as actions
+
+            policy_net_out = self.policy_net(vec_obs)
+            means = policy_net_out[:self.action_space_dim]
+            action = torch.tanh(means)
+
+        else:
+
+            # run the policy to get logits
+
+            logits  = self.policy_net(vec_obs)
+            probs_distribution = Categorical(logits=logits)
+            action = probs_distribution.probs.argmax()
+
+        return action
+
+
+    def compute_distributions(self, obs):
+        """
+        use the approximator to compute the probability distributions
+        for the input
+        takes only batched vector obs of shape: (B,n)
+        """
+
+        if self.continuous_actions:
+
+            # run the policy to get means and covariances
+            policy_net_out = self.policy_net(obs)
+
+            # compute the (unbounded) probability distribution
+            means = policy_net_out[:,:self.action_space_dim]
+            log_var = policy_net_out[:,self.action_space_dim:]
+            var = torch.exp(torch.clamp(log_var, min = self.min_logvar, max = self.max_logvar))
+            cov = torch.diag_embed(var)
+            probs_distribution = MultivariateNormal(means,cov)
+
+        else:
+
+            # run the policy to get logits
+            logits  = self.policy_net(obs)
+
+            # create the discrete distribution
+            probs_distribution = Categorical(logits=logits)
+
+        return probs_distribution
+
+
+    def value_disc(self, states, target_net=False):
+        """
+        use the value approximator (or its target version) to compute
+        the value of state-action pair(s), for discrete actions
+        returns TODO
+        """
+
+        if target_net:
+
+            values = self.target_value_net(states)
+            if self.double_q_net:
+                sec_values = self.target_sec_value_net(states)
+                return (values, sec_values)
+            return values
+
+        else:
+
+            values = self.value_net(states)
+            if self.double_q_net:
+                sec_values = self.sec_value_net(states)
+                return (values, sec_values)
+            return values
+
+
+    def value_cont(self, state_action, target_net=False):
+        """
+        use the value approximator (or its target version) to compute
+        the value of state-action pair(s), for continuous actions
+        returns TODO
+        """
+
+        if target_net:
+
+            values = self.target_value_net(state_action).squeeze()
+            if self.double_q_net:
+                sec_values = self.target_sec_value_net(state_action).squeeze()
+                return(values, sec_values)
+
+        else:
+
+            values = self.value_net(state_action).squeeze()
+            if self.double_q_net:
+                sec_values = self.sec_value_net(state_action).squeeze()
+                return(values, sec_values)
+
+        return values
+
+
+    def reparam_sample(self, states):
+        """
+        sample a action using the reparametrization trick
+        """
+
+        policy_net_out = self.policy_net(states)
+
+        means = policy_net_out[:,:self.action_space_dim]
+        log_var = policy_net_out[:,self.action_space_dim:]
+        log_var = torch.clamp(log_var, min = self.min_logvar, max = self.max_logvar)
+        var = torch.exp(log_var)
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(means)
+
+        actions_unbounded = means + (std * eps)
+        actions = torch.tanh(actions_unbounded)
+
+        # compute also the (log)probability for each action sampled
+
+        cov = torch.diag_embed(var)
+        distributions = MultivariateNormal(means,cov)
+        logprobs = distributions.log_prob(actions_unbounded)
+        logprobs -= torch.log(1-torch.tanh(actions_unbounded)**2+self.numerical_epsilon).sum(-1)
+
+        return actions, logprobs
+
+
+    def update_parameters(self, value_loss, sac_objective, alpha_loss=None):
+        """
+        update the internal parameters of the approximators
+        (networks weights + alpha) sequentially to prevent
+        gradient interference
+        """
+        self.optim.zero_grad()
+
+        # compute the gradient w.r.t. value net parameters
+        value_loss.backward()
+
+        # deactivate gradients for value net weights, this is necessary
+        # because to compute the sac_objective the value network was used again
+        # and without blocking the gradients the backward of sac_objective would
+        # accumulate gradients also for the value net weights, corrupting
+        # the ones already computed by value_loss.backward()
+        #
+        # by blocking the gradients for the value net parameters only the ones
+        # w.r.t. policy net weights (and value net input layers since they're
+        # needed for the chain rule) will be computed
+        #
+        # this was't a problem with two different optimizers because the gradients
+        # computed with value_loss.backward() were used before the
+        # sac_objective.backward() call and even after the call only the
+        # optimizer liked to policy weights was used, the gradients w.r.t.
+        # value weights were left unused and cleared before the next
+        # value_loss.backward() call,
+        #
+        # this isn't a problem for ppo either because in ppo the gradients from
+        # value and policy loss don't interfere with each other
+
+        for p in self.value_net.parameters():
+            p.requires_grad = False
+        if self.double_q_net:
+            for p in self.sec_value_net.parameters():
+                p.requires_grad = False
+
+        sac_objective.backward()
+
+        for p in self.value_net.parameters():
+            p.requires_grad = True
+        if self.double_q_net:
+            for p in self.sec_value_net.parameters():
+                p.requires_grad = True
+
+        if alpha_loss is not None:
+            alpha_loss.backward()
+
+        # gradient clipping for more stability
+        for name, obj in self.__dict__.items():
+            if isinstance(obj, torch.nn.Module):
+                torch.nn.utils.clip_grad_norm_(obj.parameters(), 0.5)
+            elif isinstance(obj, torch.nn.Parameter):
+                torch.nn.utils.clip_grad_norm_(obj, 0.5)
+
+        self.optim.step()
+
+        # update target network
+        for target_param, param in zip(self.target_value_net.parameters(), self.value_net.parameters()):
+            target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
+
+        if self.double_q_net:
+            for target_param, param in zip(self.target_sec_value_net.parameters(), self.sec_value_net.parameters()):
+                target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
+
+
+    def __str__(self):
+
+        result = ""
+
+        for name, obj in self.__dict__.items():
+            if isinstance(obj, torch.nn.Module):
+                result += "network: " + name + '\n'
+                result += str(obj) + '\n'
+            if isinstance(obj, torch.optim.Optimizer):
+                result += "optimizer: " + name + '\n'
+                result += str(obj) + '\n'
+
+        return result
+
+
 class SACAgent(BaseAgent):
 
     """
@@ -30,14 +357,13 @@ class SACAgent(BaseAgent):
     https://arxiv.org/pdf/1812.05905
     """
 
+
     def __init__(self, parameters):
 
         # extract the hardcoded values from parameters
 
         self.gamma = parameters.GAMMA
-        self.value_lr =  parameters.VALUE_LR
-        self.policy_lr = parameters.POLICY_LR
-        self.alpha_lr = parameters.ALPHA_LR
+        self.lr =  parameters.LR
         self.alpha = parameters.ALPHA
         self.memory_maxlen = parameters.MEMORY_MAXLEN
         self.memory_batch_size = parameters.MEMORY_BATCH_SIZE
@@ -49,7 +375,7 @@ class SACAgent(BaseAgent):
         self.max_logvar = parameters.MAX_LOGVAR
         self.min_logvar = parameters.MIN_LOGVAR
         self.policy_method = parameters.POLICY_METHOD
-        self.double_q = parameters.USE_DOUBLE_Q_NET
+        self.double_q_net = parameters.USE_DOUBLE_Q_NET
 
         # extract the other values added before calling the constructor
 
@@ -58,94 +384,29 @@ class SACAgent(BaseAgent):
         self.continuous_actions = parameters.env_is_continuous
         self.checkpoint = parameters.checkpoint
 
-        observation_is_3dtensor = len(self.obs_size) == 3
-
-        if self.alpha == "auto":
-            self.log_alpha = torch.nn.Parameter(torch.zeros(1).to(self.device))
-        else:
-            self.log_alpha = torch.log(torch.tensor(self.alpha).to(self.device))
-
-        if observation_is_3dtensor:
-            raise NotImplementedError("currently only vector inputs are supported")
-
-        elif len(self.obs_size) == 1:
-            # input is a vector
-
-            policy_net_input_dim = self.obs_size[0]
-
-            if self.continuous_actions:
-                policy_net_output_dim = 2*self.action_space_dim
-                value_net_input_dim = self.obs_size[0] + self.action_space_dim
-                value_net_output_dim = 1
-            else:
-                policy_net_output_dim = self.action_space_dim
-                value_net_input_dim = self.obs_size[0]
-                value_net_output_dim = self.action_space_dim
-
-        if parameters.TARGET_H == "auto":
-            self.target_h = torch.tensor(-self.action_space_dim).to(self.device) if self.continuous_actions \
-            else 0.5*torch.log(torch.tensor(self.action_space_dim)).to(self.device)
-        else:
-            self.target_h = torch.tensor(parameters.TARGET_H).to(self.device)
-
         self.buffer = []
         self.tot_steps = 0
 
         self.memory = ReplayMemory(maxlen=self.memory_maxlen)
 
-        self.policy_net = nn.Sequential(
-          nn.Linear(policy_net_input_dim, 100),
-          nn.LeakyReLU(),
-          nn.Linear(100, 100),
-          nn.LeakyReLU(),
-          nn.Linear(100, policy_net_output_dim)).to(self.device)
+        if parameters.TARGET_H == "auto":
+            self.target_h = torch.tensor(-self.action_space_dim).to(self.device) if self.continuous_actions \
+                            else 0.5*torch.log(torch.tensor(self.action_space_dim)).to(self.device)
+        else:
+            self.target_h = torch.tensor(parameters.TARGET_H).to(self.device)
 
-        self.value_net = nn.Sequential(
-          nn.Linear(value_net_input_dim , 100),
-          nn.LeakyReLU(),
-          nn.Linear(100, 100),
-          nn.LeakyReLU(),
-          nn.Linear(100, value_net_output_dim)).to(self.device)
-
-        self.target_value_net = nn.Sequential(
-          nn.Linear(value_net_input_dim , 100),
-          nn.LeakyReLU(),
-          nn.Linear(100, 100),
-          nn.LeakyReLU(),
-          nn.Linear(100, value_net_output_dim)).to(self.device)
-
-        self.target_value_net.load_state_dict(self.value_net.state_dict())
-        value_nets_params = list(self.value_net.parameters())
-
-        if self.double_q:
-
-            self.sec_value_net = nn.Sequential(
-              nn.Linear(value_net_input_dim , 100),
-              nn.LeakyReLU(),
-              nn.Linear(100, 100),
-              nn.LeakyReLU(),
-              nn.Linear(100, value_net_output_dim)).to(self.device)
-
-            self.target_sec_value_net = nn.Sequential(
-              nn.Linear(value_net_input_dim , 100),
-              nn.LeakyReLU(),
-              nn.Linear(100, 100),
-              nn.LeakyReLU(),
-              nn.Linear(100, value_net_output_dim)).to(self.device)
-
-            [value_nets_params.append(e) for e in self.sec_value_net.parameters()]
-
-            self.target_sec_value_net.load_state_dict(self.sec_value_net.state_dict())
-
-        self.optim_policy = torch.optim.Adam(self.policy_net.parameters(),
-                          lr = self.policy_lr)
-
-        self.optim_value = torch.optim.Adam(value_nets_params,
-                          lr = self.value_lr)
-
-        if self.alpha == "auto":
-            self.optim_temp = torch.optim.Adam([self.log_alpha],
-                              lr = self.alpha_lr)
+        self.model = Model(self.obs_size,
+                           self.action_space_dim,
+                           self.continuous_actions,
+                           self.lr,
+                           self.min_logvar,
+                           self.max_logvar,
+                           self.device,
+                           self.tau,
+                           self.double_q_net,
+                           self.alpha,
+                           self.target_h,
+                           self.numerical_epsilon)
 
         self.checkpoint_handler = CheckpointHandler(self)
 
@@ -154,28 +415,14 @@ class SACAgent(BaseAgent):
         else:
             print("no checkpoint, training new networks")
 
-        self.mse = torch.nn.MSELoss()
+        self.loss_fn = torch.nn.MSELoss()
 
 
     def choose_action_greedy(self, obs):
 
         with torch.no_grad():
 
-            if self.continuous_actions:
-
-                # get only the means as actions 
-
-                policy_net_out = self.policy_net(obs)
-                means = policy_net_out[:self.action_space_dim]
-                action = torch.tanh(means)
-
-            else:
-
-                # run the policy to get logits
-
-                logits  = self.policy_net(obs)
-                probs_distribution = Categorical(logits=logits)
-                action = probs_distribution.probs.argmax()
+            action = self.model.compute_action(obs)
 
         return action
 
@@ -188,49 +435,48 @@ class SACAgent(BaseAgent):
         
         with torch.no_grad():
 
+            probs_distribution = self.model.compute_distributions(obs)
+            action = probs_distribution.sample()
+
             if self.continuous_actions:
 
-                # run the policy to get means and covariances
-                policy_net_out = self.policy_net(obs)
-
-                # create (unbounded) probability distribution  
-                means = policy_net_out[:,:self.action_space_dim]
-                log_var = policy_net_out[:,self.action_space_dim:]
-                var = torch.exp(torch.clamp(log_var, min = self.min_logvar, max = self.max_logvar))
-                cov = torch.diag_embed(var)
-                probs = MultivariateNormal(means,cov)
-
-                # sample from prob distribution and apply tanh
-                action = probs.sample()
                 action = torch.tanh(action)
-
-            else:
-
-                # run the policy to get logits
-                logits  = self.policy_net(obs)
-
-                # create the discrete distribution
-                probs_distribution = Categorical(logits=logits)
-
-                # sample from prob distribution
-                action = probs_distribution.sample()
 
         return (action,None)
 
 
     def update_memory(self):
-        self.memory.buffer.extend(self.buffer)
+
+        # ignore the transition if any of the training environments have
+        # been truncated
+        # without this check the buffer will contain transitions with:
+        # S_t = last state of episode N just before truncation
+        # S_t_plus_1 = first state of the episode N+1 after reset
+        # this condition should be avoided since the transition is impossible
+
+        some_episode_was_truncated = False
+
+        for s,a,r,ns,te,tr,_ in self.buffer:
+            if not some_episode_was_truncated:
+                transition = (s,a,r,ns,te,_)
+                self.memory.buffer.append(transition)
+            if tr.any() == True:
+                some_episode_was_truncated = True
+            else:
+                some_episode_was_truncated = False
+
         self.buffer = []
 
 
     def update(self):
 
-        T = len(self.buffer)
         self.update_memory()
 
         if len(self.memory) < self.memory_batch_size or \
             self.tot_steps < self.warmup:
             return
+
+        T = len(self.buffer)
 
         for _ in range(self.gradient_steps):
 
@@ -242,7 +488,11 @@ class SACAgent(BaseAgent):
             next_states = torch.stack([t[3] for t in batch]).flatten(0,1)
             dones = torch.stack([t[4] for t in batch]).flatten(0,1)
 
-            # update soft q function 
+            # update soft q function
+
+            # sample next actions using the target policy in states
+            # collected by behavior policy (without reparametrization
+            # trick cause gradient is not needed here)
 
             if self.continuous_actions:
 
@@ -254,18 +504,7 @@ class SACAgent(BaseAgent):
 
                 with torch.no_grad():
 
-                    # sample next actions using the target policy in states
-                    # collected by behavior policy (without reparametrization 
-                    # trick cause gradient is not needed here)
-
-                    policy_net_out = self.policy_net(next_states)
-
-                    next_means = policy_net_out[:,:self.action_space_dim]
-                    log_var = policy_net_out[:,self.action_space_dim:]
-
-                    var = torch.exp(torch.clamp(log_var, min = self.min_logvar, max = self.max_logvar))
-                    cov = torch.diag_embed(var)
-                    next_probs_dist = MultivariateNormal(next_means,cov)
+                    next_probs_dist = self.model.compute_distributions(next_states)
 
                     next_actions_unbounded = next_probs_dist.sample()
                     next_action_log_probs = next_probs_dist.log_prob(next_actions_unbounded)
@@ -276,138 +515,107 @@ class SACAgent(BaseAgent):
                     next_action_log_probs -= torch.log(1-torch.tanh(next_actions_unbounded)**2+self.numerical_epsilon).sum(-1)
 
                     next_s_a_pairs = torch.concat((next_states, next_actions),dim=-1)
-                    if self.double_q:
-                        min_q = torch.min(self.target_value_net(next_s_a_pairs).squeeze(),self.target_sec_value_net(next_s_a_pairs).squeeze())
-                        targets = rewards + self.gamma*(1-dones.to(int))*(min_q - torch.exp(self.log_alpha.detach()) * next_action_log_probs)
+
+                    if self.double_q_net:
+                        next_values1, next_values2 = self.model.value_cont(next_s_a_pairs, target_net = True)
+                        next_values = torch.min(next_values1, next_values2)
                     else:
-                        targets = rewards + self.gamma*(1-dones.to(int))*(self.target_value_net(next_s_a_pairs).squeeze() - torch.exp(self.log_alpha.detach()) * next_action_log_probs)
-                    targets = targets.to(torch.float32) 
+                        next_values = self.model.value_cont(next_s_a_pairs, target_net = True)
+
+                    targets = rewards + self.gamma*(1-dones.to(int))*(next_values - torch.exp(self.model.log_alpha.detach()) * next_action_log_probs)
+                    targets = targets.to(torch.float32)
+
+                # compute predicted values
 
                 s_a_pairs = torch.concat((states,actions),dim=-1)
-
-                if self.double_q:
-                    Q1_s_a = self.value_net(s_a_pairs).squeeze(-1)
-                    Q2_s_a = self.sec_value_net(s_a_pairs).squeeze(-1)
+                if self.double_q_net:
+                    Q1_s_a,Q2_s_a = self.model.value_cont(s_a_pairs)
+                    value_loss = self.loss_fn(targets,Q1_s_a)+self.loss_fn(targets,Q2_s_a)
                 else:
-                    Q_s_a = self.value_net(s_a_pairs).squeeze(-1)
+                    Q_s_a = self.model.value_cont(s_a_pairs)
+                    value_loss = self.loss_fn(targets,Q_s_a)
 
-            else:
-                
+            elif not self.continuous_actions:
+
                 # with discrete action space there is no need to apply tanh
-                # and also entropy and value of the next state can be computed 
+                # and also entropy and value of the next state can be computed
                 # exactly using all actions instead of sampling
                 # Q(S_t,A_t) <- R_t+1 + not_done*gamma*(sum_a(pi(S_t+1,A_t+1)*Q(S_t+1,A_t+1)) + alpha*entropy(pi(S_t+1,A_t+1)))
-                
+
                 with torch.no_grad():
 
-                    logits  = self.policy_net(next_states)
+                    next_probs_dist = self.model.compute_distributions(next_states)
 
-                    next_probs_dist = Categorical(logits=logits)
                     entropy = next_probs_dist.entropy()
                     probs = next_probs_dist.probs
-                    if self.double_q:
-                        next_values = torch.min((probs*(self.target_value_net(next_states))).sum(-1),(probs*(self.target_sec_value_net(next_states))).sum(-1))
+
+                    next_values = self.model.value_disc(next_states, target_net = True)
+
+                    if self.double_q_net:
+                        next_values1, next_values2 = next_values
+                        next_state_values1, next_state_values2 = ((probs*(next_values1)).sum(-1),
+                                                                  (probs*(next_values2)).sum(-1))
+                        next_state_values = torch.min(next_state_values1, next_state_values2)
                     else:
-                        next_values = (probs*(self.target_value_net(next_states))).sum(-1)
-                    targets = rewards + self.gamma*(1-dones.to(int))*(next_values + torch.exp(self.log_alpha.detach())*entropy)
-                    targets = targets.to(torch.float32) 
+                        next_state_values = (probs*(next_values)).sum(-1)
 
-                if self.double_q:
-                    Q1_s = self.value_net(states)
+                    targets = rewards + self.gamma*(1-dones.to(int))*(next_state_values + torch.exp(self.model.log_alpha.detach())*entropy)
+                    targets = targets.to(torch.float32)
+
+                if self.double_q_net:
+                    Q1_s, Q2_s = self.model.value_disc(states)
                     Q1_s_a = torch.gather(Q1_s,-1,actions.unsqueeze(1)).squeeze()
-                    Q2_s = self.sec_value_net(states)
                     Q2_s_a = torch.gather(Q2_s,-1,actions.unsqueeze(1)).squeeze()
+                    value_loss = self.loss_fn(targets,Q1_s_a)+self.loss_fn(targets,Q2_s_a)
                 else:
-                    Q_s = self.value_net(states)
+                    Q_s = self.model.value_disc(states)
                     Q_s_a = torch.gather(Q_s,-1,actions.unsqueeze(1)).squeeze()
+                    value_loss = self.loss_fn(targets,Q_s_a)
 
-            if self.double_q:
-                loss = self.mse(targets,Q1_s_a)+self.mse(targets,Q2_s_a)
-            else:
-                loss = self.mse(targets,Q_s_a)
-
-            self.optim_value.zero_grad()
-            loss.backward()
-            self.optim_value.step()
-
-            # update policy 
+            # update policy
 
             if self.continuous_actions:
 
                 # sample actions using reparametrization trick
-                
-                policy_net_out = self.policy_net(states)
-                means = policy_net_out[:,:self.action_space_dim]
-                log_var = policy_net_out[:,self.action_space_dim:]
-                log_var = torch.clamp(log_var, min = self.min_logvar, max = self.max_logvar)
-                var = torch.exp(log_var)
-                std = torch.exp(0.5 * log_var)
-                eps = torch.randn_like(means)
-                actions_unbounded = means + (std * eps)
-                actions = torch.tanh(actions_unbounded)
 
+                actions, logprobs = self.model.reparam_sample(states)
                 s_a_pairs = torch.concat((states,actions),dim=-1)
-                if self.double_q:
-                    Q1_s_a = self.value_net(s_a_pairs).squeeze(-1)
-                    Q2_s_a = self.sec_value_net(s_a_pairs).squeeze(-1)
-                    Q_s_a = torch.min(Q1_s_a,Q2_s_a)
+
+                if self.double_q_net:
+                    Q1_s_a,Q2_s_a = self.model.value_cont(s_a_pairs)
+                    Q_s_a = torch.min(Q1_s_a.squeeze(-1),Q2_s_a.squeeze(-1))
                 else:
-                    Q_s_a = self.value_net(s_a_pairs).squeeze(-1)
+                    Q_s_a = self.model.value_cont(s_a_pairs).squeeze(-1)
 
-                cov = torch.diag_embed(var)
-                distributions = MultivariateNormal(means,cov)
-                logprobs = distributions.log_prob(actions_unbounded)
-                logprobs -= torch.log(1-torch.tanh(actions_unbounded)**2+self.numerical_epsilon).sum(-1)
+                sac_objective = (torch.exp(self.model.log_alpha.detach()) * logprobs - Q_s_a).mean()
 
-                sac_objective = (torch.exp(self.log_alpha.detach()) * logprobs - Q_s_a).mean()
-            
             else:
 
-                # with discrete action space also the objective can be computed 
+                # with discrete action space also the objective can be computed
                 # exactly considering all the actions instead of sampling one
 
-                logits  = self.policy_net(states)
-                probs_dist = Categorical(logits=logits)
+                probs_dist = self.model.compute_distributions(states)
                 entropy = probs_dist.entropy()
                 probs = probs_dist.probs
-                if self.double_q:
-                    values = torch.min((probs*(self.value_net(states).detach())).sum(-1),(probs*(self.sec_value_net(states).detach())).sum(-1))
+
+                values = self.model.value_disc(states)
+
+                if self.double_q_net:
+                    values1, values2 = values
+                    state_values1, state_values2 = ((probs*(values1)).sum(-1),
+                                                    (probs*(values2)).sum(-1))
+                    state_values = torch.min(state_values1, state_values2)
                 else:
-                    values = (probs*(self.value_net(states).detach())).sum(-1)
-                sac_objective = -(values + torch.exp(self.log_alpha.detach())*entropy).mean()
+                    state_values = (probs*(values)).sum(-1)
 
-            self.optim_policy.zero_grad()
-            sac_objective.backward()
-            self.optim_policy.step()
+                sac_objective = -(state_values + torch.exp(self.model.log_alpha.detach())*entropy).mean()
 
-            # update alpha
+            alpha_loss = None
 
             if self.alpha == "auto":
-
-                # log_alpha is used instead of alpha because the algorithm is
-                # actually learning the log itself, in this way it gets the
-                # right gradient
-
                 if self.continuous_actions:
-
-                    alpha_loss = (self.log_alpha * (-1*logprobs.detach() - self.target_h)).mean()
-
+                    alpha_loss = (self.model.log_alpha * (-1*logprobs.detach() - self.target_h)).mean()
                 else:
+                    alpha_loss = (self.model.log_alpha * (entropy.detach() - self.target_h)).mean()
 
-                    # with discrete actions the entropy can be computed exactly
-                    # in each state and the errors can be averaged
-
-                    alpha_loss = (self.log_alpha * (entropy.detach() - self.target_h)).mean()
-
-                self.optim_temp.zero_grad()
-                alpha_loss.backward()
-                self.optim_temp.step()
-
-            # update target network
-
-            for target_param, param in zip(self.target_value_net.parameters(), self.value_net.parameters()):
-                target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
-
-            if self.double_q:
-                for target_param, param in zip(self.target_sec_value_net.parameters(), self.sec_value_net.parameters()):
-                    target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
+            self.model.update_parameters(value_loss, sac_objective, alpha_loss)

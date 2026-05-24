@@ -102,23 +102,15 @@ def train_model(algo, environment, dry, checkpoint, notes):
 
     if not dry:
 
+        # create dir for current training run
         current_time = str(datetime.datetime.now()).replace(" ","__").replace(".","_").replace(":","_").replace("-","_")[:-7]
         dir_name = environment+"_"+params.ALGO_NAME+"_"+current_time
-
-        # create dir for current training run
         os.mkdir(dir_name)
 
         plotter = Plotter(dir_name)
-        
-        if params.POLICY_METHOD:
-            params.policy_net = agent.policy_net
-            params.policy_optimizer = agent.optim_policy
 
-        params.value_net = agent.value_net
-        params.value_optimizer = agent.optim_value
-
+        params.model_str = str(agent.model)
         params.notes = notes
-        
         params.save_summary(f"{dir_name}/summary.txt")
     
     num_steps = 0
@@ -155,26 +147,12 @@ def train_model(algo, environment, dry, checkpoint, notes):
 
             S_t_plus_1 = torch.tensor(observation, dtype=torch.float32).to(params.DEVICE)
 
-            episode_over = torch.tensor(terminated).to(params.DEVICE)
+            terminated = torch.tensor(terminated).to(params.DEVICE)
+            truncated = torch.tensor(truncated).to(params.DEVICE)
 
             reward = torch.tensor(reward).to(params.DEVICE)
 
-            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-            # ignore the current transition if any of the environments have reset due truncation  #
-            # without this check the buffer will contain transitions with                         #
-            # S_t = last state of episode N just before truncation                                #
-            # S_t_plus_1 = first state of the episode N+1 after reset                             #
-            # this condition should be avoided since this transition would not be the result of   #
-            # the environment's dynamics and for this reason it shouldn't be learned              #
-                                                                                                  #
-            if not some_episode_was_truncated:                                                    #
-                agent.buffer.append((S_t, action, reward, S_t_plus_1, episode_over, logprob))     #
-            if truncated.any():                                                                   #
-                some_episode_was_truncated = True                                                 #
-            else:                                                                                 #
-                some_episode_was_truncated = False                                                #
-                                                                                                  #
-            # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+            agent.buffer.append((S_t, action, reward, S_t_plus_1, terminated, truncated, logprob))     #
 
             buffer_return += reward
 
