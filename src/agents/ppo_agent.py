@@ -22,6 +22,7 @@ class Model:
                  diagonal_cov,
                  min_cov,
                  separate_cov_params,
+                 norm_obs,
                  device,
                  numerical_epsilon):
 
@@ -31,8 +32,19 @@ class Model:
         self.diagonal_cov = diagonal_cov
         self.continuous_actions = continuous_actions
         self.action_space_dim = action_space_dim
+        self.norm_obs = norm_obs
         self.min_cov = min_cov
         self.numerical_epsilon = numerical_epsilon
+
+        if self.norm_obs:
+
+            # obs normalization stats
+
+            self.obs_max = torch.nn.Parameter(torch.ones(1).to(self.device))
+            self.obs_min = torch.nn.Parameter(torch.zeros(1).to(self.device))
+
+            self.obs_max.requires_grad = False
+            self.obs_min.requires_grad = False
 
         # compute net outputs
 
@@ -56,11 +68,29 @@ class Model:
         else:
             policy_net_output_dim = action_space_dim
 
+        all_params = []
+
         # compute net inputs
 
         if self.observation_is_3d_tensor:
-            # fixed when the input is a tensor and needs to be encoded first
-            mlp_input = 100
+
+            # add a shared convolutional encoder
+
+            self.encoder = torch.nn.Sequential(
+                               torch.nn.Conv2d(obs_size[0], 32, kernel_size = 4, stride = 4, padding = "valid"),
+                               torch.nn.ReLU(),
+                               torch.nn.Conv2d(32, 64, kernel_size = 3, stride = 2, padding = "valid"),
+                               torch.nn.ReLU(),
+                               torch.nn.Conv2d(64, 256, kernel_size = 3, padding = "valid"),
+                               torch.nn.ReLU(),
+                               torch.nn.Flatten()).to(self.device)
+
+            all_params += list(self.encoder.parameters())
+
+            # dynamically compute the size of encoded vector that will used as input to the MLPs
+            with torch.no_grad():
+                dummy_obs = torch.zeros(1, *obs_size).to(self.device)
+                mlp_input = self.encoder(dummy_obs).shape[1]
 
         elif len(obs_size) == 1:
             # input is already a vector
@@ -84,27 +114,8 @@ class Model:
           nn.LeakyReLU(),
           nn.Linear(256, 1)).to(self.device)
 
-        all_params = list(self.policy_net.parameters())\
-                   + list(self.value_net.parameters())
-
-        if self.observation_is_3d_tensor:
-
-            # add a shared convolutional encoder
-
-            self.encoder = torch.nn.Sequential(
-                               torch.nn.Conv2d(obs_size[0], 32, kernel_size = 4, stride = 4, padding = "valid"),
-                               torch.nn.ReLU(),
-                               torch.nn.Conv2d(32, 64, kernel_size = 3, stride = 2, padding = "valid"),
-                               torch.nn.ReLU(),
-                               torch.nn.Conv2d(64, 128, kernel_size = 3, stride = 2, padding = "valid"),
-                               torch.nn.ReLU(),
-                               torch.nn.Conv2d(128, 256, kernel_size = 3, padding = "valid"),
-                               torch.nn.ReLU(),
-                               torch.nn.Conv2d(256, mlp_input, kernel_size = 3, padding = "valid"),
-                               torch.nn.ReLU(),
-                               torch.nn.AdaptiveAvgPool2d((1,1))).to(self.device)
-
-            all_params += list(self.encoder.parameters())
+        all_params += list(self.policy_net.parameters())\
+                    + list(self.value_net.parameters())
 
         if continuous_actions == True:
             if separate_cov_params:
@@ -117,7 +128,7 @@ class Model:
                      lr = lr)
 
 
-    def encode(self, obs):
+    def encode(self, obs, update_obs_stats = False):
         """
         turn observation in vector if it isn't already
 
@@ -129,15 +140,34 @@ class Model:
         where n is the vector size and T is the buffer size
         """
 
+        obs = obs.to(torch.float32)
+
+        if self.norm_obs:
+
+            if update_obs_stats:
+                self.obs_max.data.copy_(torch.max(self.obs_max, obs.max()))
+                self.obs_min.data.copy_(torch.min(self.obs_min, obs.min()))
+
+            # normalize obs linear
+            obs = (obs-self.obs_min)/(self.obs_max-self.obs_min)
+
         if self.observation_is_3d_tensor:
             if len(obs.shape) == 5:
-                T,n_env,c,w,h = obs.shape
-                obs = self.encoder(obs.flatten(0,1))
-                obs = obs.squeeze()
-                obs = obs.reshape(T,n_env,-1)
-            else:
+                # update | input shape = (T, n_env, C, W, H)
+                T, n_env, c, w, h = obs.shape
+                obs = obs.reshape(T * n_env, c, w, h)
                 obs = self.encoder(obs)
-                obs = obs.squeeze()
+                obs = obs.reshape(T, n_env, -1)
+
+            elif len(obs.shape) == 4:
+                # training | input shape = (n_env, C, W, H)
+                obs = self.encoder(obs)
+
+            elif len(obs.shape) == 3:
+                # inference | input shape = (C, W, H)
+                obs = obs.unsqueeze(0)
+                obs = self.encoder(obs)
+                obs = obs.squeeze(0)
 
         return obs
 
@@ -155,6 +185,8 @@ class Model:
         for name, obj in self.__dict__.items():
             if isinstance(obj, torch.nn.Module):
                 torch.nn.utils.clip_grad_norm_(obj.parameters(), 0.5)
+            elif isinstance(obj, torch.nn.Parameter):
+                torch.nn.utils.clip_grad_norm_(obj, 0.5)
 
         self.optim.step()
 
@@ -327,6 +359,7 @@ class PPOAgent(BaseAgent):
         self.lr = parameters.LR
         self.policy_method = parameters.POLICY_METHOD
         self.squash_action = parameters.SQUASH_ACTION
+        self.norm_obs = parameters.NORMALIZE_OBSERVATIONS
 
         # extract the other values added before calling the constructor
 
@@ -347,6 +380,7 @@ class PPOAgent(BaseAgent):
                            self.diagonal_cov,
                            self.min_cov,
                            self.separate_cov_params,
+                           self.norm_obs,
                            self.device,
                            self.numerical_epsilon)
 
@@ -362,13 +396,13 @@ class PPOAgent(BaseAgent):
 
     def choose_action(self, obs):
 
-        obs = self.model.encode(obs) # out shape: [n_env, vec]
-
-        # add a external dimension because all the methods used to work with
-        # observations assume they are 3d tensors
-        obs = obs.unsqueeze(dim=0)
-
         with torch.no_grad():
+
+            obs = self.model.encode(obs) # out shape: [n_env, vec]
+
+            # add a external dimension because all the methods used to work with
+            # observations assume they are 3d tensors
+            obs = obs.unsqueeze(dim=0)
 
             # generate a distribution with the net, then sample from it
 
@@ -391,9 +425,9 @@ class PPOAgent(BaseAgent):
 
     def choose_action_greedy(self, obs):
 
-        obs = self.model.encode(obs)
-
         with torch.no_grad():
+
+            obs = self.model.encode(obs)
 
             action = self.model.compute_action(obs)
 
@@ -416,18 +450,18 @@ class PPOAgent(BaseAgent):
         # extract all the values from the buffer into tensors so they can be
         # processed in parallel
 
-        states = torch.stack([t[0] for t in self.buffer])
+        states = torch.stack([t[0] for t in self.buffer]).to(torch.float32)
         actions = torch.stack([t[1] for t in self.buffer])
         rewards = torch.stack([t[2] for t in self.buffer])
-        next_states = torch.stack([t[3] for t in self.buffer])
+        next_states = torch.stack([t[3] for t in self.buffer]).to(torch.float32)
         terminated = torch.stack([t[4] for t in self.buffer])
         truncated = torch.stack([t[5] for t in self.buffer])
         log_probs_old = torch.stack([t[6] for t in self.buffer])
 
         with torch.no_grad():
 
-            enc_states = self.model.encode(states)
-            enc_next_states = self.model.encode(next_states)
+            enc_states = self.model.encode(states, update_obs_stats = True)
+            enc_next_states = self.model.encode(next_states, update_obs_stats = True)
 
             # generalized advantage estimators
 
