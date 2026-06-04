@@ -18,7 +18,7 @@ class CustomCarRacing(gym.Env):
         super().__init__()
         self.env = gym.make("CarRacing-v3",**kwargs)
         self.action_space = self.env.action_space
-        self.observation_space = gym.spaces.Box(0,1,(past_frames,96,96),np.float32)
+        self.observation_space = gym.spaces.Box(0,255,(past_frames,96,96),np.uint8)
         self.obs = np.zeros((past_frames,96,96))
         self.render_mode = kwargs['render_mode']
 
@@ -27,8 +27,8 @@ class CustomCarRacing(gym.Env):
         frame, reward, terminated, truncated, info = self.env.step(action)
         frame = frame.swapaxes(0,2)
         frame = frame.swapaxes(1,2)
-        frame = frame.mean(axis=0, dtype=np.float32) / 255.
-        new_obs = np.zeros_like(self.obs, dtype=np.float32)
+        frame = frame.mean(axis=0).astype(np.uint8)
+        new_obs = np.zeros_like(self.obs, dtype=np.uint8)
         new_obs[1:] = self.obs[:-1]
         new_obs[0] = frame
         self.obs = new_obs
@@ -36,11 +36,11 @@ class CustomCarRacing(gym.Env):
 
 
     def reset(self,**kwargs):
-        self.obs = np.zeros(self.observation_space.shape, dtype=np.float32)
+        self.obs = np.zeros(self.observation_space.shape, dtype=np.uint8)
         frame, info = self.env.reset(**kwargs)
         frame = frame.swapaxes(0,2)
         frame = frame.swapaxes(1,2)
-        frame = frame.mean(axis=0, dtype=np.float32) / 255.
+        frame = frame.mean(axis=0).astype(np.uint8)
         self.obs[0] = frame
         return (self.obs,info)
 
