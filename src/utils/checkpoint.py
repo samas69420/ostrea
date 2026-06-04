@@ -85,11 +85,11 @@ class CheckpointHandler:
 
     def save(self, checkpoint_path, full=True):
 
-        checkpoint = {'networks': self._get_network_states()}
+        checkpoint = {'networks': self._get_network_states(),
+                      'parameters': self._get_trainable_params()}
 
         if full:
             checkpoint.update({
-                'parameters': self._get_trainable_params(),
                 'optimizers': self._get_optimizer_states(),
                 'memory': self._get_memory()
             })
