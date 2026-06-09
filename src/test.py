@@ -190,6 +190,49 @@ if __name__ == "__main__":
         continuous_agent.update()
 
         print("update done")
+
+        print("testing 3d tensor obs")
+
+        params.checkpoint = None
+        params.obs_size = (4,96,96)
+        params.action_space_dim = 3
+
+        params.env_is_continuous = False
+        discrete_agent = Agent(params)
+
+        print("discrete agent created")
+
+        params.env_is_continuous = True
+        continuous_agent = Agent(params)
+
+        print("continuous agent created")
+
+        # test loop with random data, suppose a vectorized environment and 10 steps
+
+        state = torch.rand(params.N_ENV,4,96,96).to(params.DEVICE)
+
+        for t in range(10):
+
+            with torch.no_grad():
+
+                discrete_actions, disc_log_prob = discrete_agent.choose_action(state)
+                continuous_actions, cont_log_prob = continuous_agent.choose_action(state)
+
+                reward = torch.rand(params.N_ENV).to(params.DEVICE)
+                new_state = torch.rand(params.N_ENV,4,96,96).to(params.DEVICE)
+                term = (torch.ones(params.N_ENV) if t % 10 == 0 else torch.zeros(params.N_ENV)).to(params.DEVICE)
+                trunc = (torch.ones(params.N_ENV) if t % 10 == 0 else torch.zeros(params.N_ENV)).to(params.DEVICE)
+                log_prob = torch.rand(params.N_ENV).to(params.DEVICE)
+
+                discrete_agent.buffer.append((state,discrete_actions,reward,new_state,term,trunc,log_prob))
+                continuous_agent.buffer.append((state,continuous_actions,reward,new_state,term,trunc,log_prob))
+
+                state = new_state
+
+        discrete_agent.update()
+        continuous_agent.update()
+
+        print("update done")
         quit()
 
     elif args.algo == "vpg":

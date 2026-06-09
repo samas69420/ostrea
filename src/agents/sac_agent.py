@@ -6,7 +6,6 @@ from utils.checkpoint import CheckpointHandler
 from utils.replaymemory import ReplayMemory
 from agents.base_agent import BaseAgent
 
-
 class Model:
     """
     class to manage neural networks separately, the idea is that even if
@@ -25,6 +24,7 @@ class Model:
                  device,
                  tau,
                  double_q_net,
+                 norm_obs,
                  alpha,
                  target_h,
                  numerical_epsilon):
@@ -38,24 +38,71 @@ class Model:
         self.numerical_epsilon = numerical_epsilon
         self.tau = tau
         self.double_q_net = double_q_net
+        self.norm_obs = norm_obs
         self.alpha = alpha
 
+        if self.norm_obs:
+
+            # obs normalization stats, used as Parameter objs for the checkpoint handler
+
+            self.obs_max = torch.nn.Parameter(torch.ones(1).to(self.device))
+            self.obs_min = torch.nn.Parameter(torch.zeros(1).to(self.device))
+
+            self.obs_max.requires_grad = False
+            self.obs_min.requires_grad = False
+
+        all_trainable_params = []
+
+        # compute net inputs
+
         if self.observation_is_3d_tensor:
-            raise NotImplementedError("currently only vector inputs are supported")
+
+            # add a shared convolutional encoder
+            # according to sb3 documentation sac works better with two
+            # encoders, one in the policy one in the value, however a shared
+            # architecture is used here like in ppo (performance doesn't look
+            # great tho) the encoder is shared also between the first and the
+            # second Q net (if used)
+
+            self.encoder = torch.nn.Sequential(
+                               torch.nn.Conv2d(obs_size[0], 32, kernel_size = 4, stride = 4, padding = "valid"),
+                               torch.nn.ReLU(),
+                               torch.nn.Conv2d(32, 64, kernel_size = 3, stride = 2, padding = "valid"),
+                               torch.nn.ReLU(),
+                               torch.nn.Conv2d(64, 256, kernel_size = 3, padding = "valid"),
+                               torch.nn.ReLU(),
+                               torch.nn.Flatten()).to(self.device)
+
+            self.target_encoder = torch.nn.Sequential(
+                                      torch.nn.Conv2d(obs_size[0], 32, kernel_size = 4, stride = 4, padding = "valid"),
+                                      torch.nn.ReLU(),
+                                      torch.nn.Conv2d(32, 64, kernel_size = 3, stride = 2, padding = "valid"),
+                                      torch.nn.ReLU(),
+                                      torch.nn.Conv2d(64, 256, kernel_size = 3, padding = "valid"),
+                                      torch.nn.ReLU(),
+                                      torch.nn.Flatten()).to(self.device)
+
+            self.target_encoder.requires_grad = False
+            self.target_encoder.load_state_dict(self.encoder.state_dict())
+            all_trainable_params += list(self.encoder.parameters())
+
+            # dynamically compute the size of encoded vector that will used as input to the MLPs
+            with torch.no_grad():
+                dummy_obs = torch.zeros(1, *obs_size).to(self.device)
+                policy_net_input_dim = self.encoder(dummy_obs).shape[1]
 
         elif len(obs_size) == 1:
-            # input is a vector
-
+            # input is already a vector
             policy_net_input_dim = obs_size[0]
 
-            if self.continuous_actions:
-                policy_net_output_dim = 2*self.action_space_dim
-                value_net_input_dim = obs_size[0] + self.action_space_dim
-                value_net_output_dim = 1
-            else:
-                policy_net_output_dim = self.action_space_dim
-                value_net_input_dim = obs_size[0]
-                value_net_output_dim = self.action_space_dim
+        if self.continuous_actions:
+            policy_net_output_dim = 2*self.action_space_dim
+            value_net_input_dim = policy_net_input_dim + self.action_space_dim
+            value_net_output_dim = 1
+        else:
+            policy_net_output_dim = self.action_space_dim
+            value_net_input_dim = policy_net_input_dim
+            value_net_output_dim = self.action_space_dim
 
         self.policy_net = nn.Sequential(
           nn.Linear(policy_net_input_dim, 256),
@@ -87,8 +134,8 @@ class Model:
         self.target_value_net.requires_grad = False
         self.target_value_net.load_state_dict(self.value_net.state_dict())
 
-        all_trainable_params = list(self.value_net.parameters()) + \
-                               list(self.policy_net.parameters())
+        all_trainable_params += list(self.policy_net.parameters())
+        all_trainable_params += list(self.value_net.parameters())
 
         if alpha == "auto":
             self.log_alpha = torch.nn.Parameter(torch.zeros(1).to(self.device))
@@ -121,6 +168,48 @@ class Model:
             [all_trainable_params.append(e) for e in self.sec_value_net.parameters()]
 
         self.optim = torch.optim.Adam(all_trainable_params, lr = lr)
+
+
+    def encode(self, obs, target_net = False, update_obs_stats = False):
+        """
+        turn observation in vector if it isn't already
+
+        returns a tensor of shape:
+        (n_env/B, n)    - training/update
+        (n)             - inference/eval
+
+        where n is the vector size and T is the buffer size
+        """
+        obs = obs.to(torch.float32)
+
+        if self.norm_obs:
+
+            if update_obs_stats:
+                self.obs_max.data.copy_(torch.max(self.obs_max, obs.max()))
+                self.obs_min.data.copy_(torch.min(self.obs_min, obs.min()))
+
+            # normalize obs linear
+            obs = (obs-self.obs_min)/(self.obs_max-self.obs_min)
+
+        if self.observation_is_3d_tensor:
+
+            if len(obs.shape) == 4:
+                # training/update | input shape = (n_env/B, C, W, H)
+                if target_net:
+                    obs = self.target_encoder(obs)
+                else:
+                    obs = self.encoder(obs)
+
+            elif len(obs.shape) == 3:
+                # inference | input shape = (C, W, H)
+                obs = obs.unsqueeze(0)
+                if target_net:
+                    obs = self.target_encoder(obs)
+                else:
+                    obs = self.encoder(obs)
+                obs = obs.squeeze(0)
+
+        return obs
 
 
     def compute_action(self, vec_obs):
@@ -229,6 +318,7 @@ class Model:
     def reparam_sample(self, states):
         """
         sample a action using the reparametrization trick
+        a = mu(state) + std(state)*noise
         """
 
         policy_net_out = self.policy_net(states)
@@ -262,7 +352,8 @@ class Model:
         self.optim.zero_grad()
 
         # compute the gradient w.r.t. value net parameters
-        value_loss.backward()
+        # retain graph is needed because of the shared encoder
+        value_loss.backward(retain_graph = True)
 
         # deactivate gradients for value net weights, this is necessary
         # because to compute the sac_objective the value network was used again
@@ -310,12 +401,16 @@ class Model:
 
         self.optim.step()
 
-        # update target network
+        # update target networks
         for target_param, param in zip(self.target_value_net.parameters(), self.value_net.parameters()):
             target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
 
         if self.double_q_net:
             for target_param, param in zip(self.target_sec_value_net.parameters(), self.sec_value_net.parameters()):
+                target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
+
+        if hasattr(self, 'encoder'):
+            for target_param, param in zip(self.target_encoder.parameters(), self.encoder.parameters()):
                 target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
 
 
@@ -376,6 +471,7 @@ class SACAgent(BaseAgent):
         self.min_logvar = parameters.MIN_LOGVAR
         self.policy_method = parameters.POLICY_METHOD
         self.double_q_net = parameters.USE_DOUBLE_Q_NET
+        self.norm_obs = parameters.NORMALIZE_OBSERVATIONS
 
         # extract the other values added before calling the constructor
 
@@ -404,6 +500,7 @@ class SACAgent(BaseAgent):
                            self.device,
                            self.tau,
                            self.double_q_net,
+                           self.norm_obs,
                            self.alpha,
                            self.target_h,
                            self.numerical_epsilon)
@@ -422,6 +519,8 @@ class SACAgent(BaseAgent):
 
         with torch.no_grad():
 
+            obs = self.model.encode(obs)
+
             action = self.model.compute_action(obs)
 
         return action
@@ -434,6 +533,8 @@ class SACAgent(BaseAgent):
         # sample from the actual distribution generated by the net
         
         with torch.no_grad():
+
+            obs = self.model.encode(obs) # out shape: [n_env, vec]
 
             probs_distribution = self.model.compute_distributions(obs)
             action = probs_distribution.sample()
@@ -457,6 +558,7 @@ class SACAgent(BaseAgent):
         some_episode_was_truncated = False
 
         for s,a,r,ns,te,tr,_ in self.buffer:
+
             if not some_episode_was_truncated:
                 transition = (s,a,r,ns,te,_)
                 self.memory.buffer.append(transition)
@@ -488,6 +590,9 @@ class SACAgent(BaseAgent):
             next_states = torch.stack([t[3] for t in batch]).flatten(0,1)
             dones = torch.stack([t[4] for t in batch]).flatten(0,1)
 
+            # encode + update obs stats for normalization
+            states = self.model.encode(states, update_obs_stats = True)
+
             # update soft q function
 
             # sample next actions using the target policy in states
@@ -504,14 +609,15 @@ class SACAgent(BaseAgent):
 
                 with torch.no_grad():
 
+                    next_states = self.model.encode(next_states, target_net = True)
+
                     next_probs_dist = self.model.compute_distributions(next_states)
 
                     next_actions_unbounded = next_probs_dist.sample()
                     next_action_log_probs = next_probs_dist.log_prob(next_actions_unbounded)
 
+                    # apply tanh and adjust probability
                     next_actions = torch.tanh(next_actions_unbounded)
-
-                    # probability correction because of tanh
                     next_action_log_probs -= torch.log(1-torch.tanh(next_actions_unbounded)**2+self.numerical_epsilon).sum(-1)
 
                     next_s_a_pairs = torch.concat((next_states, next_actions),dim=-1)
@@ -543,6 +649,8 @@ class SACAgent(BaseAgent):
                 # Q(S_t,A_t) <- R_t+1 + not_done*gamma*(sum_a(pi(S_t+1,A_t+1)*Q(S_t+1,A_t+1)) + alpha*entropy(pi(S_t+1,A_t+1)))
 
                 with torch.no_grad():
+
+                    next_states = self.model.encode(next_states, target_net = True)
 
                     next_probs_dist = self.model.compute_distributions(next_states)
 
@@ -578,8 +686,10 @@ class SACAgent(BaseAgent):
 
                 # sample actions using reparametrization trick
 
+                # states here is not detached so the policy objective can affect the encoder
                 actions, logprobs = self.model.reparam_sample(states)
-                s_a_pairs = torch.concat((states,actions),dim=-1)
+                # states here is detached so the policy objective can affect the encoder but only through the policy
+                s_a_pairs = torch.concat((states.detach(),actions),dim=-1)
 
                 if self.double_q_net:
                     Q1_s_a,Q2_s_a = self.model.value_cont(s_a_pairs)
@@ -594,11 +704,13 @@ class SACAgent(BaseAgent):
                 # with discrete action space also the objective can be computed
                 # exactly considering all the actions instead of sampling one
 
+                # states here is not detached so the policy objective can affect the encoder
                 probs_dist = self.model.compute_distributions(states)
                 entropy = probs_dist.entropy()
                 probs = probs_dist.probs
 
-                values = self.model.value_disc(states)
+                # states here is detached so the policy objective can affect the encoder but only through the policy
+                values = self.model.value_disc(states.detach())
 
                 if self.double_q_net:
                     values1, values2 = values
@@ -609,6 +721,8 @@ class SACAgent(BaseAgent):
                     state_values = (probs*(values)).sum(-1)
 
                 sac_objective = -(state_values + torch.exp(self.model.log_alpha.detach())*entropy).mean()
+
+            # update temperature
 
             alpha_loss = None
 
