@@ -11,6 +11,81 @@ from environments import environments_table
 # import to trigger the register function
 from envs import *
 
+def profile_model(algo, shortname):
+
+    if algo == "ppo":
+        from agents.ppo_agent import PPOAgent as Agent
+        from parameters.ppo_params import params
+    elif algo == "dql":
+        from agents.dql_agent import DQLAgent as Agent
+        from parameters.dql_params import params
+    elif algo == "sac":
+        from agents.sac_agent import SACAgent as Agent
+        from parameters.sac_params import params
+    elif algo == "vpg":
+        from agents.vpg_agent import VPGAgent as Agent
+        from parameters.vpg_params import params
+    elif algo == "ddpg":
+        from agents.ddpg_agent import DDPGAgent as Agent
+        from parameters.ddpg_params import params
+    else:
+        raise ValueError("invalid algo")
+
+    full_name = environments_table[shortname]["full"]
+    args = environments_table[shortname]["args"]
+
+    if args:
+        dummy_env = gymnasium.make_vec(full_name,**args,num_envs = params.N_ENV, render_mode = None, vectorization_mode="async")
+    else:
+        dummy_env = gymnasium.make_vec(full_name,num_envs = params.N_ENV, render_mode = None, vectorization_mode="async")
+
+    env_is_continuous = not (isinstance(dummy_env.action_space, gymnasium.spaces.Discrete) or \
+                             isinstance(dummy_env.action_space, gymnasium.spaces.MultiDiscrete))
+
+    params.DEVICE = torch.device("cpu")
+    params.checkpoint = None
+    params.env_is_continuous = env_is_continuous
+    params.obs_size = dummy_env.observation_space.shape[1:]
+    params.action_space_dim = dummy_env.action_space.shape[-1] if env_is_continuous \
+                                                               else env.action_space[0].n
+    agent = Agent(params)
+
+    vec_obs_size = (params.N_ENV,*params.obs_size)
+
+    # experimental_config needed to visualize the stack
+    with profile(activities=[ProfilerActivity.CPU,ProfilerActivity.CUDA],
+                 profile_memory=True,
+                 with_stack=True,
+                 experimental_config=torch._C._profiler._ExperimentalConfig(verbose=True)) as prof:
+
+        # emulate a update iteration
+
+        while len(agent.buffer) < params.BUFFER_SIZE:
+
+            S_t = torch.rand(vec_obs_size).to(params.DEVICE)
+
+            action,logprob = agent.choose_action(S_t)
+
+            action = action.to(params.DEVICE)
+            logprob = logprob.to(params.DEVICE)
+
+            S_t_plus_1 = torch.rand(vec_obs_size).to(params.DEVICE)
+
+            terminated = torch.zeros(params.N_ENV).to(params.DEVICE)
+            truncated = torch.zeros(params.N_ENV).to(params.DEVICE)
+
+            reward = torch.rand(params.N_ENV).to(params.DEVICE)
+
+            agent.buffer.append((S_t, action, reward, S_t_plus_1, terminated, truncated, logprob))
+
+        agent.update()
+
+    prof.export_chrome_trace("trace.json")
+    print("MEMORY USAGE CPU")
+    print(prof.key_averages().table(sort_by="self_cpu_memory_usage", row_limit=15))
+    print("MEMORY USAGE GPU")
+    print(prof.key_averages().table(sort_by="self_cuda_memory_usage", row_limit=15))
+
 
 def train_model(algo, environment, dry, checkpoint, notes):
 
@@ -133,7 +208,7 @@ def train_model(algo, environment, dry, checkpoint, notes):
 
         while len(agent.buffer) < params.BUFFER_SIZE:
 
-            S_t = torch.tensor(observation, dtype=torch.float32).to(params.DEVICE)
+            S_t = torch.tensor(observation).to(params.DEVICE)
 
             action,logprob = agent.choose_action(S_t)
 
@@ -145,7 +220,7 @@ def train_model(algo, environment, dry, checkpoint, notes):
 
             observation, reward, terminated, truncated, info = env.step(scaled_action.cpu().numpy())
 
-            S_t_plus_1 = torch.tensor(observation, dtype=torch.float32).to(params.DEVICE)
+            S_t_plus_1 = torch.tensor(observation).to(params.DEVICE)
 
             terminated = torch.tensor(terminated).to(params.DEVICE)
             truncated = torch.tensor(truncated).to(params.DEVICE)
@@ -329,6 +404,7 @@ if __name__ == "__main__":
     parser.add_argument('--test', metavar = 'N', default = None, help = "test N episodes then quit", type = int)
     parser.add_argument('--notes', default = None, help = "notes to include in the experiment summary", type = str)
     parser.add_argument('-d', '--dry',action='store_true', help = "don't save logs or models")
+    parser.add_argument('-p', '--profile',action='store_true', help = "profile memory usage for a update call")
 
     args = parser.parse_args()
 
@@ -368,10 +444,14 @@ if __name__ == "__main__":
                customcartpole""".replace(" ", ""))
 
         quit()
-    
 
     if not args.environment:
         raise ValueError("environment undeclared")
+
+    if args.profile:
+        from torch.profiler import profile, ProfilerActivity, record_function
+        profile_model(args.algo, args.environment)
+        quit()
 
     if args.test:
 

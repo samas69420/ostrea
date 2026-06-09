@@ -14,6 +14,7 @@
     * update readme with stuff about custom environments
     * enable bootstrapping for truncated episodes in on-policy algos
     * better testing, ideally including all possible variants and input/output types
+    * continual backprop
 
 #### sac
     
@@ -21,10 +22,13 @@
     * state indipendent variance
     * optimize update
     * sample multiple next actions to bootstrap
+    * add standardization (welford)
 
 #### ddpg
     
     * better strategies to add noise
+    * add encoder
+    * add standardization/normalization
 
 #### dql
     
@@ -32,12 +36,18 @@
     * other types of decay
     * soft update for target nets
     * epsilon in the checkpoint 
+    * add encoder
+    * add standardization/normalization
 
 #### ppo
     
     * rewrite batching to mix not only timesteps but also environments
     * entropy augmentation 
+    * add standardization (welford)
+    * improve normalization
 
 #### vpg
     
     * squash action
+    * add encoder
+    * add standardization/normalization

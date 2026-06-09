@@ -22,4 +22,5 @@ swimmer*/
 custom*/
 media/
 videos/
+trace.json
 MUJOCO_LOG.TXT
