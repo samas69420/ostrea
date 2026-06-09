@@ -207,6 +207,9 @@ class DDPGAgent(BaseAgent):
 
     def choose_action_greedy(self, obs):
 
+        # this should be done in a separate encode function
+        obs = obs.to(torch.float32)
+
         # use the policy net to deterministically compute the action
         with torch.no_grad():
             action = self.model.compute_action(obs)
@@ -219,6 +222,9 @@ class DDPGAgent(BaseAgent):
         # use the policy net to compute the action and add noise for exploration
 
         self.tot_steps += 1
+
+        # this should be done in a separate encode function
+        obs = obs.to(torch.float32)
 
         noise_distribution = Normal(torch.zeros(self.action_space_dim), self.noise_mag)
         noise = noise_distribution.sample().to(self.device)
@@ -268,10 +274,10 @@ class DDPGAgent(BaseAgent):
 
             batch = self.memory.sample(self.memory_batch_size)
 
-            states = torch.stack([t[0] for t in batch]).flatten(0,1)
+            states = torch.stack([t[0] for t in batch]).flatten(0,1).to(torch.float32)
             actions = torch.stack([t[1] for t in batch]).flatten(0,1)
             rewards = torch.stack([t[2] for t in batch]).flatten(0,1)
-            next_states = torch.stack([t[3] for t in batch]).flatten(0,1)
+            next_states = torch.stack([t[3] for t in batch]).flatten(0,1).to(torch.float32)
             term = torch.stack([t[4] for t in batch]).flatten(0,1)
 
             # update Q loss for classic sarsa update but using the target

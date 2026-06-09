@@ -151,6 +151,9 @@ class DQLAgent(BaseAgent):
 
     def choose_action(self, obs):
 
+        # this should be done in a separate encode function
+        obs = obs.to(torch.float32)
+
         self.tot_steps += 1
         if self.tot_steps % self.update_target_net_freq == 0:
             self.model.update_target_net()
@@ -172,6 +175,9 @@ class DQLAgent(BaseAgent):
 
     def choose_action_greedy(self, obs):
 
+        # this should be done in a separate encode function
+        obs = obs.to(torch.float32)
+
         with torch.no_grad():
             Qs = self.model.value(obs)
             max_actions = torch.argmax(Qs,dim=-1)
@@ -192,12 +198,12 @@ class DQLAgent(BaseAgent):
 
             batch = self.memory.sample(self.memory_batch_size)
 
-            states = torch.cat([e[0] for e in batch])           # (T*n_env,obs_size)
-            actions = torch.cat([e[1] for e in batch])                   # (T*n_env)
-            rewards = torch.cat([e[2] for e in batch]).to(torch.float32) # (T*n_env)
-            next_states = torch.cat([e[3] for e in batch])      # (T*n_env,obs_size)
-            term = torch.cat([e[4] for e in batch])                     # (T*n_env)
-            trunc = torch.cat([e[5] for e in batch])                     # (T*n_env)
+            states = torch.cat([e[0] for e in batch]).to(torch.float32)      # (T*n_env,obs_size)
+            actions = torch.cat([e[1] for e in batch])                       # (T*n_env)
+            rewards = torch.cat([e[2] for e in batch]).to(torch.float32)     # (T*n_env)
+            next_states = torch.cat([e[3] for e in batch]).to(torch.float32) # (T*n_env,obs_size)
+            term = torch.cat([e[4] for e in batch])                          # (T*n_env)
+            trunc = torch.cat([e[5] for e in batch])                         # (T*n_env)
 
             # update Q network using the td(0) error evaluated using greedy policy
             # and computed on a batch of data sampled from replay memory

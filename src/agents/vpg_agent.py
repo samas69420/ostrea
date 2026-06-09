@@ -304,6 +304,9 @@ class VPGAgent(BaseAgent):
 
         obs = obs.unsqueeze(dim=0)
 
+        # this should be done in a separate encode function
+        obs = obs.to(torch.float32)
+
         with torch.no_grad():
 
             # generate a distribution with the net, then sample from it 
@@ -320,6 +323,9 @@ class VPGAgent(BaseAgent):
 
 
     def choose_action_greedy(self, obs):
+
+        # this should be done in a separate encode function
+        obs = obs.to(torch.float32)
 
         with torch.no_grad():
 
@@ -341,10 +347,10 @@ class VPGAgent(BaseAgent):
         # extract all the values from the buffer into tensors so they can be
         # processed in parallel
 
-        states = torch.stack([t[0] for t in self.buffer])
+        states = torch.stack([t[0] for t in self.buffer]).to(torch.float32)
         actions = torch.stack([t[1] for t in self.buffer])
         rewards = torch.stack([t[2] for t in self.buffer])
-        next_states = torch.stack([t[3] for t in self.buffer])
+        next_states = torch.stack([t[3] for t in self.buffer]).to(torch.float32)
         terminated = torch.stack([t[4] for t in self.buffer])
         truncated = torch.stack([t[5] for t in self.buffer])
         log_probs_old = torch.stack([t[6] for t in self.buffer])
