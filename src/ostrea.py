@@ -67,7 +67,8 @@ def profile_model(algo, shortname):
             action,logprob = agent.choose_action(S_t)
 
             action = action.to(params.DEVICE)
-            logprob = logprob.to(params.DEVICE)
+            if logprob:
+                logprob = logprob.to(params.DEVICE)
 
             S_t_plus_1 = torch.rand(vec_obs_size).to(params.DEVICE)
 
