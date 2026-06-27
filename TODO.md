@@ -15,6 +15,7 @@
     * enable bootstrapping for truncated episodes in on-policy algos
     * better testing, ideally including all possible variants and input/output types
     * continual backprop
+    * deploy stochastic policy
 
 #### sac
     
@@ -45,6 +46,7 @@
     * entropy augmentation 
     * add standardization (welford)
     * improve normalization
+    * epsilon greedy sampling
 
 #### vpg
     
