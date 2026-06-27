@@ -4,6 +4,7 @@ from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.distributions.categorical import Categorical
 from utils.checkpoint import CheckpointHandler
 from agents.base_agent import BaseAgent
+from networks.transformer import VisionTransformer
 
 
 class Model:
@@ -24,7 +25,8 @@ class Model:
                  separate_cov_params,
                  norm_obs,
                  device,
-                 numerical_epsilon):
+                 numerical_epsilon,
+                 encoder_type):
 
         self.observation_is_3d_tensor = len(obs_size) == 3
         self.device = device
@@ -35,6 +37,7 @@ class Model:
         self.norm_obs = norm_obs
         self.min_cov = min_cov
         self.numerical_epsilon = numerical_epsilon
+        self.encoder_type = encoder_type
 
         if self.norm_obs:
 
@@ -74,16 +77,33 @@ class Model:
 
         if self.observation_is_3d_tensor:
 
-            # add a shared convolutional encoder
+            if self.encoder_type == "cnn":
 
-            self.encoder = torch.nn.Sequential(
-                               torch.nn.Conv2d(obs_size[0], 32, kernel_size = 4, stride = 4, padding = "valid"),
-                               torch.nn.ReLU(),
-                               torch.nn.Conv2d(32, 64, kernel_size = 3, stride = 2, padding = "valid"),
-                               torch.nn.ReLU(),
-                               torch.nn.Conv2d(64, 256, kernel_size = 3, padding = "valid"),
-                               torch.nn.ReLU(),
-                               torch.nn.Flatten()).to(self.device)
+                # add a shared convolutional encoder ~400k params
+
+                self.encoder = torch.nn.Sequential(
+                                   torch.nn.Conv2d(obs_size[0], 64, kernel_size = 8, stride = 4, padding = "valid"),
+                                   torch.nn.ReLU(),
+                                   torch.nn.Conv2d(64, 128, kernel_size = 4, stride = 3, padding = "valid"),
+                                   torch.nn.ReLU(),
+                                   torch.nn.Conv2d(128, 128, kernel_size = 4, stride = 2, padding = "valid"),
+                                   torch.nn.ReLU(),
+                                   torch.nn.Flatten()).to(self.device)
+
+            elif self.encoder_type == "vit":
+
+                # add a shared vision transformer encoder ~560k params
+
+                self.encoder = VisionTransformer(obs_size=obs_size,
+                                                 patch_size = 12,  # careful here: smaller patches = larger n (bad for memory because of the n*n matrix)
+                                                 model_size = 128,
+                                                 n_blocks = 3,
+                                                 n_heads = 3,
+                                                 head_dim = 32,
+                                                 mlp_dim = 128,
+                                                 mlp_n_hlayers = 2,
+                                                 output_size = 512,
+                                                 device = self.device)
 
             all_params += list(self.encoder.parameters())
 
@@ -360,6 +380,8 @@ class PPOAgent(BaseAgent):
         self.policy_method = parameters.POLICY_METHOD
         self.squash_action = parameters.SQUASH_ACTION
         self.norm_obs = parameters.NORMALIZE_OBSERVATIONS
+        self.encoder_type = parameters.ENCODER_TYPE
+        self.deploy_stochastic_policy = parameters.DEPLOY_STOCHASTIC_POLICY
 
         # extract the other values added before calling the constructor
 
@@ -382,7 +404,8 @@ class PPOAgent(BaseAgent):
                            self.separate_cov_params,
                            self.norm_obs,
                            self.device,
-                           self.numerical_epsilon)
+                           self.numerical_epsilon,
+                           self.encoder_type)
 
         self.checkpoint_handler = CheckpointHandler(self)
 
@@ -429,7 +452,13 @@ class PPOAgent(BaseAgent):
 
             obs = self.model.encode(obs)
 
-            action = self.model.compute_action(obs)
+            if self.deploy_stochastic_policy:
+                obs = obs.unsqueeze(0).unsqueeze(0)
+                probs_distribution = self.model.compute_distributions(obs)
+                action = probs_distribution.sample().squeeze()
+
+            else:
+                action = self.model.compute_action(obs)
 
             if self.continuous_actions and self.squash_action:
                     action = torch.tanh(action)
