@@ -5,6 +5,8 @@ from torch.distributions.categorical import Categorical
 from utils.checkpoint import CheckpointHandler
 from utils.replaymemory import ReplayMemory
 from agents.base_agent import BaseAgent
+from networks.cnn import CNN
+from networks.mlp import MLP
 
 class Model:
     """
@@ -61,41 +63,17 @@ class Model:
             # the value encoder is shared between the first and the second
             # value network (if used), this is done to save some memory
 
-            self.value_encoder = torch.nn.Sequential(
-                               torch.nn.Conv2d(obs_size[0], 32, kernel_size = 4, stride = 4, padding = "valid"),
-                               torch.nn.ReLU(),
-                               torch.nn.Conv2d(32, 64, kernel_size = 3, stride = 2, padding = "valid"),
-                               torch.nn.ReLU(),
-                               torch.nn.Conv2d(64, 256, kernel_size = 3, padding = "valid"),
-                               torch.nn.ReLU(),
-                               torch.nn.Flatten()).to(self.device)
+            self.value_encoder = CNN(in_channels = obs_size[0],
+                                     device = self.device)
 
-            self.target_value_encoder = torch.nn.Sequential(
-                                      torch.nn.Conv2d(obs_size[0], 32, kernel_size = 4, stride = 4, padding = "valid"),
-                                      torch.nn.ReLU(),
-                                      torch.nn.Conv2d(32, 64, kernel_size = 3, stride = 2, padding = "valid"),
-                                      torch.nn.ReLU(),
-                                      torch.nn.Conv2d(64, 256, kernel_size = 3, padding = "valid"),
-                                      torch.nn.ReLU(),
-                                      torch.nn.Flatten()).to(self.device)
+            self.target_value_encoder = CNN(in_channels = obs_size[0],
+                                            device = self.device)
 
-            self.policy_encoder = torch.nn.Sequential(
-                               torch.nn.Conv2d(obs_size[0], 32, kernel_size = 4, stride = 4, padding = "valid"),
-                               torch.nn.ReLU(),
-                               torch.nn.Conv2d(32, 64, kernel_size = 3, stride = 2, padding = "valid"),
-                               torch.nn.ReLU(),
-                               torch.nn.Conv2d(64, 256, kernel_size = 3, padding = "valid"),
-                               torch.nn.ReLU(),
-                               torch.nn.Flatten()).to(self.device)
+            self.policy_encoder = CNN(in_channels = obs_size[0],
+                                      device = self.device)
 
-            self.target_policy_encoder = torch.nn.Sequential(
-                                      torch.nn.Conv2d(obs_size[0], 32, kernel_size = 4, stride = 4, padding = "valid"),
-                                      torch.nn.ReLU(),
-                                      torch.nn.Conv2d(32, 64, kernel_size = 3, stride = 2, padding = "valid"),
-                                      torch.nn.ReLU(),
-                                      torch.nn.Conv2d(64, 256, kernel_size = 3, padding = "valid"),
-                                      torch.nn.ReLU(),
-                                      torch.nn.Flatten()).to(self.device)
+            self.target_policy_encoder = CNN(in_channels = obs_size[0],
+                                             device = self.device)
 
             self.target_policy_encoder.requires_grad = False
             self.target_value_encoder.requires_grad = False
@@ -123,32 +101,26 @@ class Model:
             value_net_input_dim = policy_net_input_dim
             value_net_output_dim = self.action_space_dim
 
-        self.policy_net = nn.Sequential(
-          nn.Linear(policy_net_input_dim, 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, policy_net_output_dim)).to(self.device)
+        self.policy_net = MLP(input_dim = policy_net_input_dim,
+                              output_dim = policy_net_output_dim,
+                              n_layers = 4,
+                              hidden_dim = 256,
+                              activation_constructor = nn.LeakyReLU,
+                              device = self.device)
 
-        self.value_net = nn.Sequential(
-          nn.Linear(value_net_input_dim , 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, value_net_output_dim)).to(self.device)
+        self.value_net = MLP(input_dim = value_net_input_dim,
+                             output_dim = value_net_output_dim,
+                             n_layers = 4,
+                             hidden_dim = 256,
+                             activation_constructor = nn.LeakyReLU,
+                             device = self.device)
 
-        self.target_value_net = nn.Sequential(
-          nn.Linear(value_net_input_dim , 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, value_net_output_dim)).to(self.device)
+        self.target_value_net = MLP(input_dim = value_net_input_dim,
+                                    output_dim = value_net_output_dim,
+                                    n_layers = 4,
+                                    hidden_dim = 256,
+                                    activation_constructor = nn.LeakyReLU,
+                                    device = self.device)
 
         self.target_value_net.requires_grad = False
         self.target_value_net.load_state_dict(self.value_net.state_dict())
@@ -164,23 +136,19 @@ class Model:
 
         if self.double_q_net:
 
-            self.sec_value_net = nn.Sequential(
-              nn.Linear(value_net_input_dim , 256),
-              nn.LeakyReLU(),
-              nn.Linear(256, 256),
-              nn.LeakyReLU(),
-              nn.Linear(256, 256),
-              nn.LeakyReLU(),
-              nn.Linear(256, value_net_output_dim)).to(self.device)
+            self.sec_value_net = MLP(input_dim = value_net_input_dim,
+                                     output_dim = value_net_output_dim,
+                                     n_layers = 4,
+                                     hidden_dim = 256,
+                                     activation_constructor = nn.LeakyReLU,
+                                     device = self.device)
 
-            self.target_sec_value_net = nn.Sequential(
-              nn.Linear(value_net_input_dim , 256),
-              nn.LeakyReLU(),
-              nn.Linear(256, 256),
-              nn.LeakyReLU(),
-              nn.Linear(256, 256),
-              nn.LeakyReLU(),
-              nn.Linear(256, value_net_output_dim)).to(self.device)
+            self.target_sec_value_net = MLP(input_dim = value_net_input_dim,
+                                            output_dim = value_net_output_dim,
+                                            n_layers = 4,
+                                            hidden_dim = 256,
+                                            activation_constructor = nn.LeakyReLU,
+                                            device = self.device)
 
             self.target_sec_value_net.requires_grad = False
             self.target_sec_value_net.load_state_dict(self.sec_value_net.state_dict())

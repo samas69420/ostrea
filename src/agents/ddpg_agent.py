@@ -5,6 +5,7 @@ from parameters.ddpg_params import params
 from utils.checkpoint import CheckpointHandler
 from utils.replaymemory import ReplayMemory
 from agents.base_agent import BaseAgent
+from networks.mlp import MLP
 
 
 class Model:
@@ -35,39 +36,33 @@ class Model:
             policy_net_input_dim = obs_size[0]
             value_net_input_dim = obs_size[0] + self.action_space_dim
 
-        self.policy_net = nn.Sequential(
-          nn.Linear(policy_net_input_dim, 100),
-          nn.Tanh(),
-          nn.Linear(100, 100),
-          nn.Tanh(),
-          nn.Linear(100, self.action_space_dim),
-          nn.Tanh()).to(self.device)
+        self.policy_net = MLP(input_dim = policy_net_input_dim,
+                              output_dim = self.action_space_dim,
+                              n_layers = 4,
+                              hidden_dim = 256,
+                              activation_constructor = nn.LeakyReLU,
+                              device = self.device)
 
-        self.target_policy_net = nn.Sequential(
-          nn.Linear(policy_net_input_dim, 100),
-          nn.Tanh(),
-          nn.Linear(100, 100),
-          nn.Tanh(),
-          nn.Linear(100, self.action_space_dim),
-          nn.Tanh()).to(self.device)
+        self.target_policy_net = MLP(input_dim = policy_net_input_dim,
+                                     output_dim = self.action_space_dim,
+                                     n_layers = 4,
+                                     hidden_dim = 256,
+                                     activation_constructor = nn.LeakyReLU,
+                                     device = self.device)
 
-        self.value_net = nn.Sequential(
-          nn.Linear(value_net_input_dim , 64),
-          nn.LeakyReLU(),
-          nn.Linear(64, 64),
-          nn.LeakyReLU(),
-          nn.Linear(64, 64),
-          nn.LeakyReLU(),
-          nn.Linear(64, 1)).to(self.device) 
+        self.value_net = MLP(input_dim = value_net_input_dim,
+                              output_dim = 1,
+                              n_layers = 4,
+                              hidden_dim = 256,
+                              activation_constructor = nn.LeakyReLU,
+                              device = self.device)
 
-        self.target_value_net = nn.Sequential(
-          nn.Linear(value_net_input_dim , 64),
-          nn.LeakyReLU(),
-          nn.Linear(64, 64),
-          nn.LeakyReLU(),
-          nn.Linear(64, 64),
-          nn.LeakyReLU(),
-          nn.Linear(64, 1)).to(self.device) 
+        self.target_value_net = MLP(input_dim = value_net_input_dim,
+                                    output_dim = 1,
+                                    n_layers = 4,
+                                    hidden_dim = 256,
+                                    activation_constructor = nn.LeakyReLU,
+                                    device = self.device)
 
         self.target_value_net.load_state_dict(self.value_net.state_dict())
         self.target_policy_net.load_state_dict(self.policy_net.state_dict())

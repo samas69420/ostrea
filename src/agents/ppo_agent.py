@@ -5,6 +5,8 @@ from torch.distributions.categorical import Categorical
 from utils.checkpoint import CheckpointHandler
 from agents.base_agent import BaseAgent
 from networks.transformer import VisionTransformer
+from networks.cnn import CNN
+from networks.mlp import MLP
 
 
 class Model:
@@ -81,14 +83,8 @@ class Model:
 
                 # add a shared convolutional encoder ~400k params
 
-                self.encoder = torch.nn.Sequential(
-                                   torch.nn.Conv2d(obs_size[0], 64, kernel_size = 8, stride = 4, padding = "valid"),
-                                   torch.nn.ReLU(),
-                                   torch.nn.Conv2d(64, 128, kernel_size = 4, stride = 3, padding = "valid"),
-                                   torch.nn.ReLU(),
-                                   torch.nn.Conv2d(128, 128, kernel_size = 4, stride = 2, padding = "valid"),
-                                   torch.nn.ReLU(),
-                                   torch.nn.Flatten()).to(self.device)
+                self.encoder = CNN(in_channels = obs_size[0],
+                                   device = self.device)
 
             elif self.encoder_type == "vit":
 
@@ -116,23 +112,19 @@ class Model:
             # input is already a vector
             mlp_input = obs_size[0]
 
-        self.policy_net = nn.Sequential(
-          nn.Linear(mlp_input, 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, policy_net_output_dim)).to(self.device)
+        self.policy_net = MLP(input_dim = mlp_input,
+                              output_dim = policy_net_output_dim,
+                              n_layers = 4,
+                              hidden_dim = 256,
+                              activation_constructor = nn.LeakyReLU,
+                              device = self.device)
 
-        self.value_net = nn.Sequential(
-          nn.Linear(mlp_input, 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, 256),
-          nn.LeakyReLU(),
-          nn.Linear(256, 1)).to(self.device)
+        self.value_net = MLP(input_dim = mlp_input,
+                              output_dim = 1,
+                              n_layers = 4,
+                              hidden_dim = 256,
+                              activation_constructor = nn.LeakyReLU,
+                              device = self.device)
 
         all_params += list(self.policy_net.parameters())\
                     + list(self.value_net.parameters())

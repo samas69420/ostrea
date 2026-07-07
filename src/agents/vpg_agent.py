@@ -4,6 +4,7 @@ from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.distributions.categorical import Categorical
 from utils.checkpoint import CheckpointHandler
 from agents.base_agent import BaseAgent
+from networks.mlp import MLP
 
 
 class Model:
@@ -60,19 +61,19 @@ class Model:
         else:
             policy_net_output_dim = self.action_space_dim
 
-        self.policy_net = nn.Sequential(
-          nn.Linear(mlp_input, 100),
-          nn.LeakyReLU(),
-          nn.Linear(100, 100),
-          nn.LeakyReLU(),
-          nn.Linear(100, policy_net_output_dim)).to(self.device)
+        self.policy_net = MLP(input_dim = mlp_input,
+                              output_dim = policy_net_output_dim,
+                              n_layers = 4,
+                              hidden_dim = 256,
+                              activation_constructor = nn.LeakyReLU,
+                              device = self.device)
 
-        self.value_net = nn.Sequential(
-          nn.Linear(mlp_input, 100),
-          nn.LeakyReLU(),
-          nn.Linear(100, 100),
-          nn.LeakyReLU(),
-          nn.Linear(100, 1)).to(self.device)
+        self.value_net = MLP(input_dim = mlp_input,
+                              output_dim = 1,
+                              n_layers = 4,
+                              hidden_dim = 256,
+                              activation_constructor = nn.LeakyReLU,
+                              device = self.device)
 
         # all trainable params
 
