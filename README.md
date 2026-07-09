@@ -34,13 +34,13 @@ The agent is periodically tested during training and when it achieves a new best
 
 ## Supported algorithms
 
-| algorithm | continuous actions | discrete actions |
-| :------------ | :------------- | :------------- |
-| dql | &cross; |  &check;|
-| ddpg| &check; |  &cross;|
-| vpg | &check; |  &check;|
-| ppo | &check; |  &check;|
-| sac | &check; |  &check;|
+| algorithm | vector observations | 3d observations | continuous actions | discrete actions |
+| :------------ | :------------- | :------------- | :------------- | :------------- |
+| dql | &check; | &cross; | &cross; |  &check;|
+| ddpg| &check; | &cross; | &check; |  &cross;|
+| vpg | &check; | &cross; | &check; |  &check;|
+| ppo | &check; | &check; | &check; |  &check;|
+| sac | &check; | &check; | &check; |  &check;|
 
 ---
 
@@ -66,6 +66,8 @@ The agent is periodically tested during training and when it achieves a new best
 * inverted\_d\_pendulum
 * inverted\_pendulum
 * swimmer
+* customcartpole
+* customcarracing
 
 ---
 
