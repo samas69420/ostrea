@@ -317,6 +317,16 @@ class VPGAgent(BaseAgent):
             # sample from prob distribution
             action = probs_distribution.sample().squeeze()
 
+            # fix dimensions
+            # without this when the action is 1d and continuous its dim vanishes for N_ENV = 1
+            if len(action.shape) == 0:
+                action = action.unsqueeze(0)
+            if self.continuous_actions:
+                if len(action.shape) == 1 and self.action_space_dim > 1:
+                    action = action.unsqueeze(0)
+                if len(action.shape) == 1 and self.action_space_dim == 1:
+                    action = action.unsqueeze(-1)
+
             # return also the probability of the action sampled (for later)
             log_prob_action = probs_distribution.log_prob(action).squeeze()
 
@@ -436,9 +446,22 @@ class VPGAgent(BaseAgent):
                 for t in reversed(range(len(returns))):
                     dones = terminated[t].logical_or(truncated[t]).to(torch.float32)
                     next_return = returns[t+1] if t + 1 < T else 0.0
-                    returns[t] = rewards[t] + self.gamma * next_return * (1.0 - dones[t])
+                    returns[t] = rewards[t] + self.gamma * next_return * (1.0 - dones)
 
                 advantages = returns - values
+
+            # returns only
+
+            if self.advantage_type == None:
+
+                returns = torch.zeros(T,self.n_env, dtype=torch.float32).to(self.device)
+
+                for t in reversed(range(len(returns))):
+                    dones = terminated[t].logical_or(truncated[t]).to(torch.float32)
+                    next_return = returns[t+1] if t + 1 < T else 0.0
+                    returns[t] = rewards[t] + self.gamma * next_return * (1.0 - dones)
+
+                advantages = returns
 
             # normalize advantages
             advantages = (advantages - advantages.mean()) / (advantages.std() + self.numerical_epsilon)
